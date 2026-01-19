@@ -1,0 +1,1326 @@
+{
+	"info": {
+		"_postman_id": "a7na-language-school-api-complete",
+		"name": "🏫 Language School API - Complete",
+		"description": "Collection complète pour tester toutes les fonctionnalités de l'API de la plateforme d'école de langues en ligne",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "12345678"
+	},
+	"item": [
+		{
+			"name": "🔐 Authentification",
+			"item": [
+				{
+					"name": "Connexion Admin",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    pm.environment.set('auth_token', response.token);",
+									"    pm.environment.set('user_id', response.user._id);",
+									"    pm.environment.set('user_role', response.user.role);",
+									"    pm.environment.set('admin_token', response.token);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"admin@languageschool.com\",\n  \"password\": \"admin123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/login",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "login"]
+						}
+					}
+				},
+				{
+					"name": "Connexion Étudiant (reglo)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    pm.environment.set('student_token', response.token);",
+									"    pm.environment.set('student_id', response.user._id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"marie.dubois@example.com\",\n  \"password\": \"student123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/login",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "login"]
+						}
+					}
+				},
+				{
+					"name": "Connexion Professeur",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    pm.environment.set('professor_token', response.token);",
+									"    pm.environment.set('professor_id', response.user._id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"sarah.johnson@languageschool.com\",\n  \"password\": \"prof123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/login",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "login"]
+						}
+					}
+				},
+				{
+					"name": "Inviter un Utilisateur",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"firstName\": \"Test\",\n  \"lastName\": \"User\",\n  \"email\": \"test.user@example.com\",\n  \"role\": \"student\",\n  \"language\": \"en\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/invite",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "invite"]
+						}
+					}
+				},
+				{
+					"name": "Obtenir Profil",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/auth/profile",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "profile"]
+						}
+					}
+				},
+				{
+					"name": "Demander Réinitialisation Mot de Passe",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"admin@languageschool.com\",\n  \"language\": \"en\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/request-password-reset",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "request-password-reset"]
+						}
+					}
+				},
+				{
+					"name": "Renvoyer Email de Vérification",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"emma.wilson@example.com\",\n  \"language\": \"en\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/resend-verification",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "resend-verification"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "🏥 Santé",
+			"item": [
+				{
+					"name": "Vérifier Statut du Serveur",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/health",
+							"host": ["{{base_url}}"],
+							"path": ["api", "health"]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 200', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Response has correct structure', function () {",
+									"    const response = pm.response.json();",
+									"    pm.expect(response).to.have.property('status');",
+									"    pm.expect(response.status).to.eql('OK');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "👥 Utilisateurs",
+			"item": [
+				{
+					"name": "Lister Tous les Utilisateurs",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/users?page=1&limit=10",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users"],
+							"query": [
+								{"key": "page", "value": "1"},
+								{"key": "limit", "value": "10"},
+								{"key": "role", "value": "", "disabled": true},
+								{"key": "status", "value": "", "disabled": true},
+								{"key": "search", "value": "", "disabled": true}
+							]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 200', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.length > 0) {",
+									"        pm.environment.set('user_id', response.data[0]._id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Obtenir Utilisateur par ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/users/{{user_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users", "{{user_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Obtenir Mon Profil",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/users/profile",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users", "profile"]
+						}
+					}
+				},
+				{
+					"name": "Mettre à Jour Mon Profil",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"phone\": \"+1234567890\",\n  \"preferences\": {\n    \"language\": \"en\",\n    \"notifications\": {\n      \"email\": true,\n      \"push\": true\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/users/profile",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users", "profile"]
+						}
+					}
+				},
+				{
+					"name": "Mettre à Jour Utilisateur",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"phone\": \"+9876543210\",\n  \"bio\": {\n    \"en\": \"Updated bio\",\n    \"fr\": \"Bio mise à jour\",\n    \"ar\": \"السيرة الذاتية المحدثة\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/users/{{user_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users", "{{user_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Mettre à Jour Statut Utilisateur",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"reglo\",\n  \"reason\": \"Paiement confirmé\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/users/{{user_id}}/status",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users", "{{user_id}}", "status"]
+						}
+					}
+				},
+				{
+					"name": "Obtenir Statistiques Utilisateurs",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/users/stats/overview",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users", "stats", "overview"]
+						}
+					}
+				},
+				{
+					"name": "Supprimer Utilisateur",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/users/{{user_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users", "{{user_id}}"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "📚 Cours",
+			"item": [
+				{
+					"name": "Lister Tous les Cours (Public)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/courses?page=1&limit=10",
+							"host": ["{{base_url}}"],
+							"path": ["api", "courses"],
+							"query": [
+								{"key": "page", "value": "1"},
+								{"key": "limit", "value": "10"},
+								{"key": "language", "value": "", "disabled": true},
+								{"key": "level", "value": "", "disabled": true},
+								{"key": "category", "value": "", "disabled": true},
+								{"key": "search", "value": "", "disabled": true}
+							]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.length > 0) {",
+									"        pm.environment.set('course_id', response.data[0]._id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Obtenir Cours par ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/courses/{{course_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "courses", "{{course_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Créer un Nouveau Cours",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{professor_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"title\": {\n    \"en\": \"Advanced English Grammar\",\n    \"fr\": \"Grammaire Anglaise Avancée\",\n    \"ar\": \"قواعد اللغة الإنجليزية المتقدمة\"\n  },\n  \"description\": {\n    \"en\": \"Master advanced English grammar concepts and improve your writing skills\",\n    \"fr\": \"Maîtrisez les concepts de grammaire anglaise avancée et améliorez vos compétences en écriture\",\n    \"ar\": \"أتقن مفاهيم قواعد اللغة الإنجليزية المتقدمة وحسّن مهاراتك في الكتابة\"\n  },\n  \"shortDescription\": {\n    \"en\": \"Advanced grammar course\",\n    \"fr\": \"Cours de grammaire avancée\",\n    \"ar\": \"دورة قواعد متقدمة\"\n  },\n  \"language\": \"english\",\n  \"level\": \"advanced\",\n  \"category\": \"grammar\",\n  \"duration\": 30,\n  \"maxStudents\": 25,\n  \"price\": 1200,\n  \"currency\": \"MAD\",\n  \"status\": \"draft\",\n  \"isPublic\": false\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/courses",
+							"host": ["{{base_url}}"],
+							"path": ["api", "courses"]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data._id) {",
+									"        pm.environment.set('course_id', response.data._id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Mettre à Jour Cours",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{professor_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"published\",\n  \"isPublic\": true,\n  \"featured\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/courses/{{course_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "courses", "{{course_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Inscrire Étudiant au Cours",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{student_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/courses/{{course_id}}/enroll",
+							"host": ["{{base_url}}"],
+							"path": ["api", "courses", "{{course_id}}", "enroll"]
+						}
+					}
+				},
+				{
+					"name": "Mettre à Jour Progrès Étudiant",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{professor_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"studentId\": \"{{student_id}}\",\n  \"progress\": 75\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/courses/{{course_id}}/progress",
+							"host": ["{{base_url}}"],
+							"path": ["api", "courses", "{{course_id}}", "progress"]
+						}
+					}
+				},
+				{
+					"name": "Désinscrire Étudiant du Cours",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{student_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/courses/{{course_id}}/enroll",
+							"host": ["{{base_url}}"],
+							"path": ["api", "courses", "{{course_id}}", "enroll"]
+						}
+					}
+				},
+				{
+					"name": "Obtenir Cours en Vedette",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/courses/featured?limit=6",
+							"host": ["{{base_url}}"],
+							"path": ["api", "courses", "featured"],
+							"query": [
+								{"key": "limit", "value": "6"}
+							]
+						}
+					}
+				},
+				{
+					"name": "Rechercher Cours",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/courses/search?q=english&page=1&limit=10",
+							"host": ["{{base_url}}"],
+							"path": ["api", "courses", "search"],
+							"query": [
+								{"key": "q", "value": "english"},
+								{"key": "page", "value": "1"},
+								{"key": "limit", "value": "10"},
+								{"key": "language", "value": "", "disabled": true},
+								{"key": "level", "value": "", "disabled": true},
+								{"key": "category", "value": "", "disabled": true}
+							]
+						}
+					}
+				},
+				{
+					"name": "Supprimer Cours",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{professor_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/courses/{{course_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "courses", "{{course_id}}"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "🎓 Classes",
+			"item": [
+				{
+					"name": "Lister Toutes les Classes",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/classes?page=1&limit=10",
+							"host": ["{{base_url}}"],
+							"path": ["api", "classes"],
+							"query": [
+								{"key": "page", "value": "1"},
+								{"key": "limit", "value": "10"},
+								{"key": "course", "value": "", "disabled": true},
+								{"key": "type", "value": "", "disabled": true},
+								{"key": "status", "value": "", "disabled": true}
+							]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.length > 0) {",
+									"        pm.environment.set('class_id', response.data[0]._id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Obtenir Classe par ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/classes/{{class_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "classes", "{{class_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Créer une Nouvelle Classe (Live)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{professor_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"title\": {\n    \"en\": \"Live English Conversation\",\n    \"fr\": \"Conversation Anglaise en Direct\",\n    \"ar\": \"محادثة إنجليزية مباشرة\"\n  },\n  \"description\": {\n    \"en\": \"Practice English conversation in a live session\",\n    \"fr\": \"Pratiquez la conversation anglaise dans une session en direct\",\n    \"ar\": \"مارس المحادثة الإنجليزية في جلسة مباشرة\"\n  },\n  \"course\": \"{{course_id}}\",\n  \"type\": \"live\",\n  \"status\": \"scheduled\",\n  \"schedule\": {\n    \"startTime\": \"2024-12-25T10:00:00Z\",\n    \"endTime\": \"2024-12-25T11:30:00Z\",\n    \"timezone\": \"UTC\",\n    \"recurrence\": \"weekly\"\n  },\n  \"maxStudents\": 15,\n  \"liveConfig\": {\n    \"platform\": \"zoom\",\n    \"waitingRoom\": true,\n    \"recording\": false\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/classes",
+							"host": ["{{base_url}}"],
+							"path": ["api", "classes"]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data._id) {",
+									"        pm.environment.set('class_id', response.data._id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Créer une Nouvelle Classe (Recorded)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{professor_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"title\": {\n    \"en\": \"Recorded Grammar Lesson\",\n    \"fr\": \"Leçon de Grammaire Enregistrée\",\n    \"ar\": \"درس قواعد مسجل\"\n  },\n  \"description\": {\n    \"en\": \"Pre-recorded grammar lesson\",\n    \"fr\": \"Leçon de grammaire préenregistrée\",\n    \"ar\": \"درس قواعد مسجل مسبقًا\"\n  },\n  \"course\": \"{{course_id}}\",\n  \"type\": \"recorded\",\n  \"status\": \"scheduled\",\n  \"content\": {\n    \"videoUrl\": \"https://example.com/video.mp4\",\n    \"videoDuration\": 45,\n    \"documents\": [\n      {\n        \"title\": {\n          \"en\": \"Lesson Notes\",\n          \"fr\": \"Notes de Cours\",\n          \"ar\": \"ملاحظات الدرس\"\n        },\n        \"url\": \"https://example.com/notes.pdf\",\n        \"type\": \"pdf\",\n        \"size\": 1024000\n      }\n    ]\n  },\n  \"maxStudents\": 50\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/classes",
+							"host": ["{{base_url}}"],
+							"path": ["api", "classes"]
+						}
+					}
+				},
+				{
+					"name": "Mettre à Jour Classe",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{professor_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"ongoing\",\n  \"liveConfig\": {\n    \"meetingUrl\": \"https://zoom.us/j/123456789\",\n    \"meetingId\": \"123456789\",\n    \"meetingPassword\": \"secure123\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/classes/{{class_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "classes", "{{class_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Inscrire Étudiant à la Classe",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{student_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/classes/{{class_id}}/enroll",
+							"host": ["{{base_url}}"],
+							"path": ["api", "classes", "{{class_id}}", "enroll"]
+						}
+					}
+				},
+				{
+					"name": "Marquer Présence Étudiant",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{professor_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"studentId\": \"{{student_id}}\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/classes/{{class_id}}/attendance",
+							"host": ["{{base_url}}"],
+							"path": ["api", "classes", "{{class_id}}", "attendance"]
+						}
+					}
+				},
+				{
+					"name": "Obtenir Classes en Direct",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/classes/live?limit=10",
+							"host": ["{{base_url}}"],
+							"path": ["api", "classes", "live"],
+							"query": [
+								{"key": "limit", "value": "10"}
+							]
+						}
+					}
+				},
+				{
+					"name": "Obtenir Classes à Venir",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/classes/upcoming?limit=10&days=7",
+							"host": ["{{base_url}}"],
+							"path": ["api", "classes", "upcoming"],
+							"query": [
+								{"key": "limit", "value": "10"},
+								{"key": "days", "value": "7"}
+							]
+						}
+					}
+				},
+				{
+					"name": "Supprimer Classe",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{professor_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/classes/{{class_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "classes", "{{class_id}}"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "📝 Candidatures",
+			"item": [
+				{
+					"name": "Soumettre une Candidature",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"applicant\": {\n    \"firstName\": \"John\",\n    \"lastName\": \"Doe\",\n    \"email\": \"john.doe.new@example.com\",\n    \"phone\": \"+1234567890\",\n    \"dateOfBirth\": \"1990-01-15\",\n    \"nationality\": \"American\"\n  },\n  \"education\": {\n    \"degree\": \"Master in English Literature\",\n    \"institution\": \"University of California\",\n    \"graduationYear\": 2020,\n    \"field\": \"English Literature\"\n  },\n  \"teachingExperience\": {\n    \"years\": 3,\n    \"description\": {\n      \"en\": \"Three years of teaching English to international students\",\n      \"fr\": \"Trois ans d'enseignement de l'anglais aux étudiants internationaux\",\n      \"ar\": \"ثلاث سنوات من تدريس الإنجليزية للطلاب الدوليين\"\n    }\n  },\n  \"languages\": [\n    {\n      \"language\": \"english\",\n      \"proficiency\": \"native\",\n      \"teachingLevel\": \"all\"\n    }\n  ],\n  \"motivation\": {\n    \"en\": \"I am passionate about teaching English and helping students achieve their goals\",\n    \"fr\": \"Je suis passionné par l'enseignement de l'anglais et aider les étudiants à atteindre leurs objectifs\",\n    \"ar\": \"أنا شغوف بتدريس الإنجليزية ومساعدة الطلاب على تحقيق أهدافهم\"\n  },\n  \"availability\": {\n    \"schedule\": \"part-time\",\n    \"timezone\": \"UTC-8\",\n    \"startDate\": \"2024-02-01\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/applications",
+							"host": ["{{base_url}}"],
+							"path": ["api", "applications"]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data._id) {",
+									"        pm.environment.set('application_id', response.data._id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Lister Toutes les Candidatures",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/applications?page=1&limit=10",
+							"host": ["{{base_url}}"],
+							"path": ["api", "applications"],
+							"query": [
+								{"key": "page", "value": "1"},
+								{"key": "limit", "value": "10"},
+								{"key": "status", "value": "", "disabled": true},
+								{"key": "search", "value": "", "disabled": true}
+							]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.length > 0 && !pm.environment.get('application_id')) {",
+									"        pm.environment.set('application_id', response.data[0]._id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Obtenir Candidature par ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/applications/{{application_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "applications", "{{application_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Mettre à Jour Candidature",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"priority\": \"high\",\n  \"tags\": [\"experienced\", \"native-speaker\"]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/applications/{{application_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "applications", "{{application_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Mettre à Jour Statut Candidature",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"under_review\",\n  \"reason\": \"Application is being reviewed\",\n  \"notes\": \"Strong candidate with good experience\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/applications/{{application_id}}/status",
+							"host": ["{{base_url}}"],
+							"path": ["api", "applications", "{{application_id}}", "status"]
+						}
+					}
+				},
+				{
+					"name": "Ajouter Communication",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"type\": \"email\",\n  \"message\": \"Thank you for your application. We will review it and get back to you soon.\",\n  \"scheduledAt\": null\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/applications/{{application_id}}/communication",
+							"host": ["{{base_url}}"],
+							"path": ["api", "applications", "{{application_id}}", "communication"]
+						}
+					}
+				},
+				{
+					"name": "Programmer un Test",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"testType\": \"language_test\",\n  \"scheduledAt\": \"2024-12-20T14:00:00Z\",\n  \"duration\": 60,\n  \"instructions\": \"Please prepare for a language proficiency test\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/applications/{{application_id}}/test",
+							"host": ["{{base_url}}"],
+							"path": ["api", "applications", "{{application_id}}", "test"]
+						}
+					}
+				},
+				{
+					"name": "Évaluer Candidature",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"overallScore\": 85,\n  \"technicalScore\": 20,\n  \"communicationScore\": 18,\n  \"experienceScore\": 22,\n  \"strengths\": \"Strong educational background and teaching experience\",\n  \"weaknesses\": \"Limited experience with online teaching platforms\",\n  \"recommendation\": \"Recommended for interview\",\n  \"finalDecision\": \"approved\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/applications/{{application_id}}/evaluate",
+							"host": ["{{base_url}}"],
+							"path": ["api", "applications", "{{application_id}}", "evaluate"]
+						}
+					}
+				},
+				{
+					"name": "Obtenir Statistiques Candidatures",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{admin_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/applications/stats/overview",
+							"host": ["{{base_url}}"],
+							"path": ["api", "applications", "stats", "overview"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "🧪 Tests de Sécurité",
+			"item": [
+				{
+					"name": "Accès sans Token",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/auth/profile",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "profile"]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Should return 401 Unauthorized', function () {",
+									"    pm.response.to.have.status(401);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Token Invalide",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer invalid_token_here"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/auth/profile",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "profile"]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Should return 401 Unauthorized', function () {",
+									"    pm.response.to.have.status(401);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Accès Étudiant à Endpoint Admin",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{student_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/users",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users"]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Should return 403 Forbidden', function () {",
+									"    pm.response.to.have.status(403);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// Script de pré-requête global",
+					"console.log('Exécution de la requête:', pm.info.requestName);"
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// Tests globaux",
+					"pm.test('Response time is less than 5000ms', function () {",
+					"    pm.expect(pm.response.responseTime).to.be.below(5000);",
+					"});",
+					"",
+					"pm.test('Response has valid JSON', function () {",
+					"    pm.response.to.be.json;",
+					"});"
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:5000",
+			"type": "string"
+		},
+		{
+			"key": "auth_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "admin_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "student_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "professor_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "user_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "student_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "professor_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "course_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "class_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "application_id",
+			"value": "",
+			"type": "string"
+		}
+	]
+}
