@@ -1,6 +1,21 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
+// Optional auth: set req.user if valid token, don't fail if no token
+const optionalAuth = async (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) return next();
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.userId).select('-password');
+    if (user && user.status !== 'suspended' && !user.isLocked) req.user = user;
+    next();
+  } catch (e) {
+    next();
+  }
+};
+
 // Middleware pour vérifier le token JWT
 const authenticateToken = async (req, res, next) => {
   try {
@@ -8,9 +23,9 @@ const authenticateToken = async (req, res, next) => {
     const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
     if (!token) {
-      return res.status(401).json({ 
-        error: 'Token d\'accès requis',
-        message: 'Veuillez vous connecter pour accéder à cette ressource'
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired token'
       });
     }
 
@@ -21,9 +36,9 @@ const authenticateToken = async (req, res, next) => {
     const user = await User.findById(decoded.userId).select('-password');
     
     if (!user) {
-      return res.status(401).json({ 
-        error: 'Token invalide',
-        message: 'Utilisateur non trouvé'
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired token'
       });
     }
 
@@ -48,16 +63,16 @@ const authenticateToken = async (req, res, next) => {
     next();
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({ 
-        error: 'Token invalide',
-        message: 'Le token d\'accès est invalide'
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired token'
       });
     }
-    
+
     if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({ 
-        error: 'Token expiré',
-        message: 'Le token d\'accès a expiré. Veuillez vous reconnecter.'
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired token'
       });
     }
 
@@ -73,16 +88,16 @@ const authenticateToken = async (req, res, next) => {
 const authorizeRoles = (...roles) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ 
-        error: 'Non authentifié',
-        message: 'Vous devez être connecté pour accéder à cette ressource'
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired token'
       });
     }
 
     if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ 
-        error: 'Accès refusé',
-        message: 'Vous n\'avez pas les permissions nécessaires pour accéder à cette ressource'
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'You do not have permission to access this resource'
       });
     }
 
@@ -94,9 +109,9 @@ const authorizeRoles = (...roles) => {
 const authorizeAdminLevels = (...levels) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ 
-        error: 'Non authentifié',
-        message: 'Vous devez être connecté pour accéder à cette ressource'
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired token'
       });
     }
 
@@ -122,9 +137,9 @@ const authorizeAdminLevels = (...levels) => {
 const checkStatus = (...statuses) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ 
-        error: 'Non authentifié',
-        message: 'Vous devez être connecté pour accéder à cette ressource'
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired token'
       });
     }
 
@@ -142,9 +157,9 @@ const checkStatus = (...statuses) => {
 // Middleware spécial pour les étudiants (doit être "reglo")
 const requireStudentStatus = (req, res, next) => {
   if (!req.user) {
-    return res.status(401).json({ 
-      error: 'Non authentifié',
-      message: 'Vous devez être connecté pour accéder à cette ressource'
+    return res.status(401).json({
+      error: 'Unauthorized',
+      message: 'Invalid or expired token'
     });
   }
 
@@ -170,9 +185,9 @@ const requireOwnership = (resourceModel, resourceIdParam = 'id') => {
   return async (req, res, next) => {
     try {
       if (!req.user) {
-        return res.status(401).json({ 
-          error: 'Non authentifié',
-          message: 'Vous devez être connecté pour accéder à cette ressource'
+        return res.status(401).json({
+          error: 'Unauthorized',
+          message: 'Invalid or expired token'
         });
       }
 
@@ -213,9 +228,9 @@ const requireOwnership = (resourceModel, resourceIdParam = 'id') => {
 const requireUserOwnership = async (req, res, next) => {
   try {
     if (!req.user) {
-      return res.status(401).json({ 
-        error: 'Non authentifié',
-        message: 'Vous devez être connecté pour accéder à cette ressource'
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired token'
       });
     }
 
@@ -244,9 +259,9 @@ const requireUserOwnership = async (req, res, next) => {
 const requireCourseEnrollment = async (req, res, next) => {
   try {
     if (!req.user) {
-      return res.status(401).json({ 
-        error: 'Non authentifié',
-        message: 'Vous devez être connecté pour accéder à cette ressource'
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired token'
       });
     }
 
@@ -292,6 +307,7 @@ const requireCourseEnrollment = async (req, res, next) => {
 
 module.exports = {
   authenticateToken,
+  optionalAuth,
   authorizeRoles,
   authorizeAdminLevels,
   checkStatus,

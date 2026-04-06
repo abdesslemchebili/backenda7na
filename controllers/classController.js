@@ -1,6 +1,7 @@
 const Class = require('../models/Class');
 const Course = require('../models/Course');
 const User = require('../models/User');
+const ClassGroup = require('../models/ClassGroup');
 
 // @desc    Récupérer toutes les classes (avec filtres)
 // @route   GET /api/classes
@@ -15,7 +16,7 @@ const getAllClasses = async (req, res) => {
       search, 
       page = 1, 
       limit = 10,
-      sortBy = 'scheduledAt',
+      sortBy = 'schedule.startTime',
       sortOrder = 'desc'
     } = req.query;
 
@@ -75,7 +76,6 @@ const getAllClasses = async (req, res) => {
     const total = await Class.countDocuments(filters);
 
     res.json({
-      success: true,
       data: classes,
       pagination: {
         page: parseInt(page),
@@ -135,7 +135,7 @@ const getClassById = async (req, res) => {
       }
     }
 
-    res.json({ success: true, data: classItem });
+    res.json(classItem);
   } catch (error) {
     console.error('Erreur getClassById:', error);
     res.status(500).json({ 
@@ -150,11 +150,24 @@ const getClassById = async (req, res) => {
 // @access  Professeurs et admins seulement
 const createClass = async (req, res) => {
   try {
-    const classData = req.body;
-    
+    const classData = { ...req.body };
+
     // Assigner le professeur si non spécifié
     if (!classData.professor) {
       classData.professor = req.user._id;
+    }
+
+    if (classData.classGroupId) {
+      const cg = await ClassGroup.findById(classData.classGroupId);
+      if (!cg) {
+        return res.status(400).json({ error: 'BadRequest', message: 'Class group not found' });
+      }
+      if (cg.professorId.toString() !== classData.professor.toString()) {
+        return res.status(400).json({ error: 'BadRequest', message: 'Professor does not match the cohort' });
+      }
+      if (cg.courseId && classData.course && cg.courseId.toString() !== classData.course.toString()) {
+        return res.status(400).json({ error: 'BadRequest', message: 'Course does not match the cohort' });
+      }
     }
 
     // Vérifier que l'utilisateur peut créer la classe
@@ -177,11 +190,7 @@ const createClass = async (req, res) => {
       .populate('course', 'title')
       .populate('professor', 'firstName lastName email');
 
-    res.status(201).json({ 
-      success: true, 
-      data: populatedClass,
-      message: 'Classe créée avec succès'
-    });
+    res.status(201).json(populatedClass);
   } catch (error) {
     console.error('Erreur createClass:', error);
     res.status(500).json({ 
@@ -225,11 +234,7 @@ const updateClass = async (req, res) => {
     ).populate('course', 'title')
      .populate('professor', 'firstName lastName email');
 
-    res.json({ 
-      success: true, 
-      data: updatedClass,
-      message: 'Classe mise à jour avec succès'
-    });
+    res.json(updatedClass);
   } catch (error) {
     console.error('Erreur updateClass:', error);
     res.status(500).json({ 
@@ -255,9 +260,9 @@ const deleteClass = async (req, res) => {
     }
 
     // Vérifier les permissions
-    if (req.user.role === 'professor' && classItem.professor.toString() !== req.user.id) {
+    if (req.user.role === 'professor' && classItem.professor.toString() !== req.user._id.toString()) {
       const course = await Course.findById(classItem.course);
-      if (!course || course.professor.toString() !== req.user.id) {
+      if (!course || course.professor.toString() !== req.user._id.toString()) {
         return res.status(403).json({ 
           success: false, 
           error: 'Vous ne pouvez supprimer que vos propres classes' 
@@ -270,8 +275,7 @@ const deleteClass = async (req, res) => {
     await Class.findByIdAndDelete(id);
 
     res.json({ 
-      success: true, 
-      message: 'Classe supprimée avec succès' 
+      message: 'Class deleted successfully' 
     });
   } catch (error) {
     console.error('Erreur deleteClass:', error);
@@ -321,8 +325,7 @@ const enrollStudent = async (req, res) => {
     await classItem.enrollStudent(req.user._id);
 
     res.json({ 
-      success: true, 
-      message: 'Inscription réussie à la classe'
+      message: 'Enrolled successfully'
     });
   } catch (error) {
     console.error('Erreur enrollStudent:', error);
@@ -330,6 +333,77 @@ const enrollStudent = async (req, res) => {
       success: false, 
       error: 'Erreur lors de l\'inscription à la classe' 
     });
+  }
+};
+
+// @desc    Start session (status → ongoing)
+// @route   POST /api/classes/:id/start
+// @access  Professor (owner), Admin
+const startSession = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { meetingUrl, recordingStarted } = req.body || {};
+
+    const classItem = await Class.findById(id);
+    if (!classItem) {
+      return res.status(404).json({ error: 'NotFound', message: 'Class not found' });
+    }
+    if (req.user.role === 'professor' && classItem.professor.toString() !== req.user._id.toString()) {
+      const course = await Course.findById(classItem.course);
+      if (!course || course.professor.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ error: 'Forbidden', message: 'Not authorized to start this session' });
+      }
+    }
+    if (classItem.type !== 'live') {
+      return res.status(400).json({ error: 'BadRequest', message: 'Only live sessions can be started' });
+    }
+    const now = new Date();
+    if (classItem.schedule.startTime && classItem.schedule.startTime > now) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'Session can only be started at or after scheduled time'
+      });
+    }
+    const update = { status: 'ongoing' };
+    if (meetingUrl) update['liveConfig.meetingUrl'] = meetingUrl;
+    if (typeof recordingStarted === 'boolean') update['liveConfig.recordingStarted'] = recordingStarted;
+    const updated = await Class.findByIdAndUpdate(id, update, { new: true })
+      .populate('course', 'title')
+      .populate('professor', 'firstName lastName email');
+    res.json(updated);
+  } catch (error) {
+    console.error('Erreur startSession:', error);
+    res.status(500).json({ success: false, error: 'Erreur lors du démarrage de la session' });
+  }
+};
+
+// @desc    End session (status → completed)
+// @route   POST /api/classes/:id/end
+// @access  Professor (owner), Admin
+const endSession = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { recordingUrl } = req.body || {};
+
+    const classItem = await Class.findById(id);
+    if (!classItem) {
+      return res.status(404).json({ error: 'NotFound', message: 'Class not found' });
+    }
+    if (req.user.role === 'professor' && classItem.professor.toString() !== req.user._id.toString()) {
+      const course = await Course.findById(classItem.course);
+      if (!course || course.professor.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ error: 'Forbidden', message: 'Not authorized to end this session' });
+      }
+    }
+    const update = { status: 'completed' };
+    if (recordingUrl) update['liveConfig.recordingUrl'] = recordingUrl;
+    const updated = await Class.findByIdAndUpdate(id, update, { new: true })
+      .populate('course', 'title')
+      .populate('professor', 'firstName lastName email');
+    res.json(updated);
+  } catch (error) {
+    console.error('Erreur endSession:', error);
+    res.status(500).json({ success: false, error: 'Erreur lors de la fin de la session' });
   }
 };
 
@@ -375,8 +449,7 @@ const markAttendance = async (req, res) => {
     await classItem.markAttendance(studentId);
 
     res.json({ 
-      success: true, 
-      message: 'Présence marquée avec succès'
+      message: 'Attendance marked successfully'
     });
   } catch (error) {
     console.error('Erreur markAttendance:', error);
@@ -407,7 +480,6 @@ const getLiveClasses = async (req, res) => {
     .sort({ 'schedule.startTime': 1 });
 
     res.json({
-      success: true,
       data: classes
     });
   } catch (error) {
@@ -439,7 +511,6 @@ const getUpcomingClasses = async (req, res) => {
     .sort({ 'schedule.startTime': 1 });
 
     res.json({
-      success: true,
       data: classes
     });
   } catch (error) {
@@ -457,6 +528,8 @@ module.exports = {
   createClass,
   updateClass,
   deleteClass,
+  startSession,
+  endSession,
   enrollStudent,
   markAttendance,
   getLiveClasses,

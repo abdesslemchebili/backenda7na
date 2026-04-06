@@ -7,11 +7,15 @@ const User = require('../models/User');
 const Course = require('../models/Course');
 const Class = require('../models/Class');
 const Application = require('../models/Application');
+const ClassGroup = require('../models/ClassGroup');
+const Lead = require('../models/Lead');
 
 // Fonction pour se connecter à MongoDB
 const connectDB = async () => {
   try {
-    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/language_school');
+    await mongoose.connect(
+      process.env.MONGODB_URI || process.env.DATABASE_URL || 'mongodb://localhost:27017/language_school'
+    );
     console.log('✅ Connexion à MongoDB établie');
   } catch (error) {
     console.error('❌ Erreur de connexion à MongoDB:', error.message);
@@ -26,6 +30,8 @@ const clearDatabase = async () => {
     await Course.deleteMany({});
     await Class.deleteMany({});
     await Application.deleteMany({});
+    await ClassGroup.deleteMany({});
+    await Lead.deleteMany({});
     console.log('🗑️ Base de données nettoyée');
   } catch (error) {
     console.error('❌ Erreur lors du nettoyage:', error);
@@ -314,9 +320,13 @@ const createCourses = async (users) => {
       }
     ];
 
+    const marie = users.find((u) => u.email === 'marie.dubois@example.com');
     const createdCourses = [];
     for (const courseData of courses) {
       const course = new Course(courseData);
+      if (marie) {
+        course.enrolledStudents.push({ student: marie._id, progress: 30 });
+      }
       await course.save();
       createdCourses.push(course);
       console.log(`✅ Cours créé: ${course.title.en}`);
@@ -329,9 +339,35 @@ const createCourses = async (users) => {
   }
 };
 
-// Fonction pour créer des classes de test
-const createClasses = async (courses) => {
+// Fonction pour créer des cohorts (class groups)
+const createClassGroups = async (users, courses) => {
   try {
+    const prof = users.find((u) => u.email === 'sarah.johnson@languageschool.com');
+    const marie = users.find((u) => u.email === 'marie.dubois@example.com');
+    if (!prof || !courses[0]) return [];
+
+    const g = await ClassGroup.create({
+      name: 'Cohort A — English Beginners',
+      description: 'Demo cohort for admin / professor class-group pages',
+      courseId: courses[0]._id,
+      professorId: prof._id,
+      studentIds: marie ? [marie._id] : [],
+      status: 'active'
+    });
+    console.log(`✅ Class group créé: ${g.name}`);
+    return [g];
+  } catch (error) {
+    console.error('❌ Erreur lors de la création des class groups:', error);
+    throw error;
+  }
+};
+
+// Fonction pour créer des classes de test
+const createClasses = async (courses, users, classGroups) => {
+  try {
+    const marie = users.find((u) => u.email === 'marie.dubois@example.com');
+    const cohortId = classGroups && classGroups[0] ? classGroups[0]._id : null;
+
     const classes = [
       {
         title: {
@@ -346,6 +382,7 @@ const createClasses = async (courses) => {
         },
         course: courses[0]._id,
         professor: courses[0].professor,
+        ...(cohortId ? { classGroupId: cohortId } : {}),
         type: 'live',
         status: 'scheduled',
         schedule: {
@@ -393,11 +430,16 @@ const createClasses = async (courses) => {
     ];
 
     const createdClasses = [];
+    let idx = 0;
     for (const classData of classes) {
       const classItem = new Class(classData);
       await classItem.save();
+      if (idx === 0 && marie) {
+        await classItem.enrollStudent(marie._id);
+      }
       createdClasses.push(classItem);
       console.log(`✅ Classe créée: ${classItem.title.en}`);
+      idx += 1;
     }
 
     return createdClasses;
@@ -506,7 +548,8 @@ const seedDatabase = async () => {
     
     const users = await createUsers();
     const courses = await createCourses(users);
-    const classes = await createClasses(courses);
+    const classGroups = await createClassGroups(users, courses);
+    const classes = await createClasses(courses, users, classGroups);
     const applications = await createApplications();
     
     console.log('\n🎉 Seeding terminé avec succès !');
@@ -514,6 +557,7 @@ const seedDatabase = async () => {
     console.log(`   - ${users.length} utilisateurs créés`);
     console.log(`   - ${courses.length} cours créés`);
     console.log(`   - ${classes.length} classes créées`);
+    console.log(`   - ${classGroups.length} cohortes (class groups) créées`);
     console.log(`   - ${applications.length} candidatures créées`);
     
     console.log('\n🔑 Comptes de test:');

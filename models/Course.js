@@ -67,7 +67,7 @@ const courseSchema = new mongoose.Schema({
   },
   category: {
     type: String,
-    enum: ['grammar', 'conversation', 'business', 'academic', 'culture', 'exam_prep'],
+    enum: ['general', 'grammar', 'conversation', 'business', 'academic', 'culture', 'exam_prep'],
     required: true
   },
   duration: {

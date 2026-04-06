@@ -9,14 +9,27 @@ const {
   generateTempPassword
 } = require('../utils/emailService');
 
-// Générer un token JWT
+const crypto = require('crypto');
+
+// Générer un token JWT (access token)
 const generateToken = (userId) => {
   return jwt.sign(
     { userId },
     process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    { expiresIn: process.env.JWT_EXPIRES_IN || '1h' }
   );
 };
+
+const getExpiresInSeconds = () => {
+  const expires = process.env.JWT_EXPIRES_IN || '1h';
+  if (expires.endsWith('d')) return parseInt(expires) * 24 * 3600;
+  if (expires.endsWith('h')) return parseInt(expires) * 3600;
+  if (expires.endsWith('m')) return parseInt(expires) * 60;
+  return 3600;
+};
+
+// Generate refresh token (opaque, stored in DB)
+const generateRefreshToken = () => crypto.randomBytes(40).toString('hex');
 
 // Connexion utilisateur
 const login = async (req, res) => {
@@ -43,8 +56,8 @@ const login = async (req, res) => {
     // Vérifier si le compte est verrouillé
     if (user.isLocked) {
       return res.status(423).json({
-        error: 'Compte verrouillé',
-        message: 'Votre compte est temporairement verrouillé. Veuillez réessayer plus tard.'
+        error: 'Locked',
+        message: 'Account temporarily locked due to too many failed attempts.'
       });
     }
 
@@ -70,8 +83,8 @@ const login = async (req, res) => {
     // Vérifier si l'email est vérifié (sauf pour les admins)
     if (user.role !== 'admin' && !user.emailVerified) {
       return res.status(403).json({
-        error: 'Email non vérifié',
-        message: 'Veuillez vérifier votre adresse email avant de vous connecter',
+        error: 'Forbidden',
+        message: 'Please verify your email before signing in.',
         requiresVerification: true
       });
     }
@@ -79,41 +92,47 @@ const login = async (req, res) => {
     // Vérifier le statut pour les étudiants
     if (user.role === 'student' && user.status !== 'reglo') {
       return res.status(403).json({
-        error: 'Paiement requis',
-        message: 'Votre paiement doit être confirmé pour accéder à la plateforme',
+        error: 'Forbidden',
+        message: 'Payment required to access the platform.',
         paymentRequired: true,
         status: user.status
       });
     }
 
-    // Générer le token
+    // Générer les tokens
     const token = generateToken(user._id);
+    const refreshToken = generateRefreshToken();
+    const refreshExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    user.refreshToken = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    user.refreshTokenExpires = refreshExpires;
+    await user.save();
 
-    // Préparer la réponse
+    // Préparer la réponse selon la spécification API
     const userResponse = {
       _id: user._id,
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
       role: user.role,
-      adminLevel: user.adminLevel,
       status: user.status,
-      emailVerified: user.emailVerified,
-      avatar: user.avatar,
-      preferences: user.preferences,
-      fullName: user.fullName
+      phone: user.phone || undefined,
+      avatar: user.avatar || undefined,
+      bio: user.bio || { en: '', fr: '', ar: '' },
+      preferences: user.preferences || {
+        language: 'en',
+        notifications: {
+          email: true,
+          push: true
+        }
+      },
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
     };
 
-    // Ajouter les informations spécifiques au rôle
-    if (user.role === 'student') {
-      userResponse.studentInfo = user.studentInfo;
-    } else if (user.role === 'professor') {
-      userResponse.professorInfo = user.professorInfo;
-    }
-
     res.json({
-      message: 'Connexion réussie',
       token,
+      refreshToken,
+      expiresIn: getExpiresInSeconds(),
       user: userResponse
     });
 
@@ -194,16 +213,8 @@ const inviteUser = async (req, res) => {
     }
 
     res.status(201).json({
-      message: 'Utilisateur invité avec succès',
-      user: {
-        _id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        role: user.role,
-        adminLevel: user.adminLevel,
-        status: user.status
-      }
+      message: 'Invitation sent successfully',
+      user: { _id: user._id, email: user.email, role: user.role }
     });
 
   } catch (error) {
@@ -215,10 +226,10 @@ const inviteUser = async (req, res) => {
   }
 };
 
-// Vérifier l'email
+// Vérifier l'email (token depuis params ou query : /verify/:token ou /verify?token=...)
 const verifyEmail = async (req, res) => {
   try {
-    const { token } = req.params;
+    const token = req.params.token || req.query.token;
 
     if (!token) {
       return res.status(400).json({
@@ -269,8 +280,8 @@ const verifyEmail = async (req, res) => {
     user.status = user.status === 'invited' ? 'verified' : user.status;
     await user.save();
 
-    res.json({
-      message: 'Email vérifié avec succès',
+    const payload = {
+      message: 'Email verified successfully. You can now sign in.',
       user: {
         _id: user._id,
         firstName: user.firstName,
@@ -280,24 +291,60 @@ const verifyEmail = async (req, res) => {
         status: user.status,
         emailVerified: user.emailVerified
       }
-    });
+    };
+
+    // Clic depuis l'email (navigateur) : page HTML de succès (fonctionne même si le frontend est arrêté)
+    const acceptsHtml = req.get('Accept') && req.get('Accept').includes('text/html');
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    if (acceptsHtml) {
+      const html = `
+        <!DOCTYPE html>
+        <html><head><meta charset="utf-8"><title>Email vérifié</title></head>
+        <body style="font-family:sans-serif;max-width:480px;margin:80px auto;padding:24px;text-align:center;">
+          <h1 style="color:#27ae60;">✓ Email vérifié</h1>
+          <p>Votre adresse email a été vérifiée. Vous pouvez maintenant vous connecter.</p>
+          <p><a href="${frontendUrl}/login" style="color:#3498db;">Aller à la page de connexion</a></p>
+        </body></html>`;
+      return res.type('html').send(html);
+    }
+    res.json(payload);
 
   } catch (error) {
+    const acceptsHtml = req.get('Accept') && req.get('Accept').includes('text/html');
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const sendErrorHtml = (title, message, code) => {
+      if (acceptsHtml) {
+        const html = `
+          <!DOCTYPE html>
+          <html><head><meta charset="utf-8"><title>${title}</title></head>
+          <body style="font-family:sans-serif;max-width:480px;margin:80px auto;padding:24px;text-align:center;">
+            <h1 style="color:#e74c3c;">${title}</h1>
+            <p>${message}</p>
+            <p><a href="${frontendUrl}/login" style="color:#3498db;">Aller à la page de connexion</a></p>
+          </body></html>`;
+        return res.status(code).type('html').send(html);
+      }
+      return null;
+    };
+
     if (error.name === 'JsonWebTokenError') {
+      if (sendErrorHtml('Lien invalide', 'Le lien de vérification est invalide.', 400)) return;
       return res.status(400).json({
-        error: 'Token invalide',
-        message: 'Le token de vérification est invalide'
+        error: 'BadRequest',
+        message: 'Invalid or expired verification token'
       });
     }
-    
+
     if (error.name === 'TokenExpiredError') {
+      if (sendErrorHtml('Lien expiré', 'Le lien de vérification a expiré. Demandez un nouvel email depuis la page de connexion.', 400)) return;
       return res.status(400).json({
-        error: 'Token expiré',
-        message: 'Le token de vérification a expiré'
+        error: 'BadRequest',
+        message: 'Invalid or expired verification token'
       });
     }
 
     console.error('Erreur lors de la vérification d\'email:', error);
+    if (sendErrorHtml('Erreur', 'Une erreur est survenue. Réessayez plus tard.', 500)) return;
     res.status(500).json({
       error: 'Erreur serveur',
       message: 'Une erreur est survenue lors de la vérification de l\'email'
@@ -317,34 +364,21 @@ const requestPasswordReset = async (req, res) => {
       });
     }
 
-    // Trouver l'utilisateur
     const user = await User.findByEmail(email);
-    if (!user) {
-      // Ne pas révéler si l'email existe ou non pour des raisons de sécurité
-      return res.json({
-        message: 'Si l\'email existe dans notre système, un lien de réinitialisation a été envoyé'
-      });
+    if (user) {
+      const resetToken = generatePasswordResetToken(user._id);
+      user.passwordResetToken = resetToken;
+      user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000);
+      await user.save();
+      try {
+        await sendPasswordReset(user, language);
+      } catch (emailError) {
+        console.error('Erreur lors de l\'envoi de l\'email:', emailError);
+      }
     }
 
-    // Générer un token de réinitialisation
-    const resetToken = generatePasswordResetToken(user._id);
-    user.passwordResetToken = resetToken;
-    user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 heure
-    await user.save();
-
-    // Envoyer l'email de réinitialisation
-    try {
-      await sendPasswordReset(user, language);
-    } catch (emailError) {
-      console.error('Erreur lors de l\'envoi de l\'email:', emailError);
-      return res.status(500).json({
-        error: 'Erreur d\'envoi d\'email',
-        message: 'Impossible d\'envoyer l\'email de réinitialisation'
-      });
-    }
-
-    res.json({
-      message: 'Si l\'email existe dans notre système, un lien de réinitialisation a été envoyé'
+    res.status(200).json({
+      message: 'If an account exists with this email, you will receive a password reset link.'
     });
 
   } catch (error) {
@@ -402,21 +436,21 @@ const resetPassword = async (req, res) => {
     await user.save();
 
     res.json({
-      message: 'Mot de passe réinitialisé avec succès'
+      message: 'Password has been reset. You can now sign in.'
     });
 
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {
       return res.status(400).json({
-        error: 'Token invalide',
-        message: 'Le token de réinitialisation est invalide'
+        error: 'BadRequest',
+        message: 'Invalid or expired reset token'
       });
     }
     
     if (error.name === 'TokenExpiredError') {
       return res.status(400).json({
-        error: 'Token expiré',
-        message: 'Le token de réinitialisation a expiré'
+        error: 'BadRequest',
+        message: 'Invalid or expired reset token'
       });
     }
 
@@ -440,41 +474,20 @@ const resendVerificationEmail = async (req, res) => {
       });
     }
 
-    // Trouver l'utilisateur
     const user = await User.findByEmail(email);
-    if (!user) {
-      return res.status(404).json({
-        error: 'Utilisateur non trouvé',
-        message: 'Aucun utilisateur trouvé avec cet email'
-      });
+    if (user && !user.emailVerified) {
+      user.emailVerificationToken = generateVerificationToken(user._id);
+      user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await user.save();
+      try {
+        await sendEmailVerification(user, language);
+      } catch (emailError) {
+        console.error('Erreur lors de l\'envoi de l\'email:', emailError);
+      }
     }
 
-    // Vérifier si l'email est déjà vérifié
-    if (user.emailVerified) {
-      return res.status(400).json({
-        error: 'Email déjà vérifié',
-        message: 'Cet email a déjà été vérifié'
-      });
-    }
-
-    // Générer un nouveau token
-    user.emailVerificationToken = generateVerificationToken(user._id);
-    user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 heures
-    await user.save();
-
-    // Envoyer l'email
-    try {
-      await sendEmailVerification(user, language);
-    } catch (emailError) {
-      console.error('Erreur lors de l\'envoi de l\'email:', emailError);
-      return res.status(500).json({
-        error: 'Erreur d\'envoi d\'email',
-        message: 'Impossible d\'envoyer l\'email de vérification'
-      });
-    }
-
-    res.json({
-      message: 'Email de vérification renvoyé avec succès'
+    res.status(200).json({
+      message: 'If the account is unverified, a new verification email has been sent.'
     });
 
   } catch (error) {
@@ -482,6 +495,64 @@ const resendVerificationEmail = async (req, res) => {
     res.status(500).json({
       error: 'Erreur serveur',
       message: 'Une erreur est survenue lors du renvoi de l\'email de vérification'
+    });
+  }
+};
+
+// Refresh access token
+const refreshTokenHandler = async (req, res) => {
+  try {
+    const { refreshToken: tokenFromBody } = req.body;
+    const token = tokenFromBody || req.cookies?.refreshToken;
+
+    if (!token) {
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired refresh token'
+      });
+    }
+
+    const hashed = crypto.createHash('sha256').update(token).digest('hex');
+    const user = await User.findOne({
+      refreshToken: hashed,
+      refreshTokenExpires: { $gt: new Date() }
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired refresh token'
+      });
+    }
+
+    const accessToken = generateToken(user._id);
+    res.json({
+      token: accessToken,
+      expiresIn: getExpiresInSeconds()
+    });
+  } catch (error) {
+    console.error('Erreur refresh token:', error);
+    res.status(500).json({
+      error: 'Erreur serveur',
+      message: 'Une erreur est survenue'
+    });
+  }
+};
+
+// Logout - invalidate refresh token
+const logout = async (req, res) => {
+  try {
+    if (req.user && req.user._id) {
+      await User.findByIdAndUpdate(req.user._id, {
+        $unset: { refreshToken: 1, refreshTokenExpires: 1 }
+      });
+    }
+    res.json({ message: 'Logged out successfully' });
+  } catch (error) {
+    console.error('Erreur logout:', error);
+    res.status(500).json({
+      error: 'Erreur serveur',
+      message: 'Une erreur est survenue'
     });
   }
 };
@@ -498,27 +569,29 @@ const getProfile = async (req, res) => {
       });
     }
 
-    res.json({
-      user: {
-        _id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        role: user.role,
-        adminLevel: user.adminLevel,
-        status: user.status,
-        emailVerified: user.emailVerified,
-        avatar: user.avatar,
-        preferences: user.preferences,
-        fullName: user.fullName,
-        studentInfo: user.studentInfo,
-        professorInfo: user.professorInfo,
-        bio: user.bio,
-        phone: user.phone,
-        timezone: user.timezone,
-        lastLogin: user.lastLogin
-      }
-    });
+    // Format de réponse selon la spécification API
+    const userResponse = {
+      _id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      role: user.role,
+      status: user.status,
+      phone: user.phone || undefined,
+      avatar: user.avatar || undefined,
+      bio: user.bio || { en: '', fr: '', ar: '' },
+      preferences: user.preferences || {
+        language: 'en',
+        notifications: {
+          email: true,
+          push: true
+        }
+      },
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    };
+
+    res.json(userResponse);
 
   } catch (error) {
     console.error('Erreur lors de la récupération du profil:', error);
@@ -529,8 +602,127 @@ const getProfile = async (req, res) => {
   }
 };
 
+// Enregistrer un nouvel utilisateur
+const register = async (req, res) => {
+  try {
+    const { firstName, lastName, email, password, confirmPassword, role } = req.body;
+
+    // Validation des données
+    if (!firstName || !lastName || !email || !password || !confirmPassword) {
+      return res.status(400).json({
+        error: 'Données manquantes',
+        message: 'Tous les champs sont requis'
+      });
+    }
+
+    // Vérifier que les mots de passe correspondent
+    if (password !== confirmPassword) {
+      return res.status(400).json({
+        error: 'Mots de passe non correspondants',
+        message: 'Les mots de passe ne correspondent pas'
+      });
+    }
+
+    // Vérifier la longueur du mot de passe
+    if (password.length < 6) {
+      return res.status(400).json({
+        error: 'Mot de passe trop court',
+        message: 'Le mot de passe doit contenir au moins 6 caractères'
+      });
+    }
+
+    // Vérifier le rôle
+    if (role && !['student', 'professor'].includes(role)) {
+      return res.status(400).json({
+        error: 'Rôle invalide',
+        message: 'Le rôle doit être "student" ou "professor"'
+      });
+    }
+
+    // Vérifier si l'email existe déjà
+    const existingUser = await User.findByEmail(email);
+    if (existingUser) {
+      return res.status(400).json({
+        error: 'Email déjà utilisé',
+        message: 'Un utilisateur avec cet email existe déjà'
+      });
+    }
+
+    // Créer l'utilisateur
+    const userData = {
+      firstName,
+      lastName,
+      email,
+      password,
+      role: role || 'student',
+      status: 'pending',
+      emailVerified: false,
+      emailVerificationToken: generateVerificationToken(null),
+      emailVerificationExpires: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 heures
+    };
+
+    const user = new User(userData);
+    await user.save();
+
+    // Mettre à jour le token avec l'ID de l'utilisateur
+    user.emailVerificationToken = generateVerificationToken(user._id);
+    await user.save();
+
+    // Envoyer l'email de vérification
+    try {
+      await sendEmailVerification(user, user.preferences?.language || 'en');
+    } catch (emailError) {
+      console.error('Erreur lors de l\'envoi de l\'email:', emailError);
+      // Ne pas bloquer la création si l'email échoue
+    }
+
+    const response = {
+      message: 'Account created successfully. Please check your email to verify your account.',
+      user: {
+        _id: user._id,
+        email: user.email,
+        role: user.role
+      }
+    };
+    // En dev uniquement : exposer le lien de vérification pour tester sans ouvrir l'email
+    if (process.env.NODE_ENV === 'development') {
+      const apiBase = process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`;
+      response._devVerificationLink = `${apiBase}/api/auth/verify?token=${user.emailVerificationToken}`;
+    }
+    res.status(201).json(response);
+
+  } catch (error) {
+    console.error('Erreur lors de l\'enregistrement:', error);
+    
+    // Gérer les erreurs de validation Mongoose
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({
+        error: 'Erreur de validation',
+        message: errors.join(', ')
+      });
+    }
+
+    // Gérer les erreurs de duplication
+    if (error.code === 11000) {
+      return res.status(400).json({
+        error: 'Email déjà utilisé',
+        message: 'Un utilisateur avec cet email existe déjà'
+      });
+    }
+
+    res.status(500).json({
+      error: 'Erreur serveur',
+      message: 'Une erreur est survenue lors de l\'enregistrement'
+    });
+  }
+};
+
 module.exports = {
   login,
+  register,
+  logout,
+  refreshTokenHandler,
   inviteUser,
   verifyEmail,
   requestPasswordReset,

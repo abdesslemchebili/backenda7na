@@ -43,6 +43,12 @@ const classSchema = new mongoose.Schema({
     ref: 'Course',
     required: true
   },
+  /** Optional cohort link (scheduled session for a class group) */
+  classGroupId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'ClassGroup',
+    default: null
+  },
   professor: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -165,6 +171,7 @@ const classSchema = new mongoose.Schema({
       type: Boolean,
       default: false
     },
+    recordingStarted: Boolean,
     recordingUrl: String
   },
 

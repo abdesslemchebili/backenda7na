@@ -47,7 +47,6 @@ const getAllUsers = async (req, res) => {
     const total = await User.countDocuments(filters);
 
     res.json({
-      success: true,
       data: users,
       pagination: {
         page: parseInt(page),
@@ -78,12 +77,12 @@ const getUserById = async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ 
-        success: false, 
-        error: 'Utilisateur non trouvé' 
+        error: 'NotFound', 
+        message: 'User not found' 
       });
     }
 
-    res.json({ success: true, data: user });
+    res.json(user);
   } catch (error) {
     console.error('Erreur getUserById:', error);
     res.status(500).json({ 
@@ -118,16 +117,12 @@ const updateUser = async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ 
-        success: false, 
-        error: 'Utilisateur non trouvé' 
+        error: 'NotFound', 
+        message: 'User not found' 
       });
     }
 
-    res.json({ 
-      success: true, 
-      data: user,
-      message: 'Utilisateur mis à jour avec succès'
-    });
+    res.json(user);
   } catch (error) {
     console.error('Erreur updateUser:', error);
     res.status(500).json({ 
@@ -148,23 +143,22 @@ const deleteUser = async (req, res) => {
     const user = await User.findById(id);
     if (!user) {
       return res.status(404).json({ 
-        success: false, 
-        error: 'Utilisateur non trouvé' 
+        error: 'NotFound', 
+        message: 'User not found' 
       });
     }
 
-    if (user.role === 'admin' && user.adminLevel === 'super') {
+    if (user.role === 'admin' && (user.adminLevel === 'super' || user.adminLevel === 'full')) {
       return res.status(403).json({ 
-        success: false, 
-        error: 'Impossible de supprimer un administrateur super' 
+        error: 'Forbidden', 
+        message: 'Cannot delete super admin' 
       });
     }
 
     await User.findByIdAndDelete(id);
 
     res.json({ 
-      success: true, 
-      message: 'Utilisateur supprimé avec succès' 
+      message: 'User deleted successfully' 
     });
   } catch (error) {
     console.error('Erreur deleteUser:', error);
@@ -186,8 +180,8 @@ const updateUserStatus = async (req, res) => {
     const validStatuses = ['invited', 'pending', 'verified', 'reglo', 'suspended'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ 
-        success: false, 
-        error: 'Statut invalide' 
+        error: 'BadRequest', 
+        message: 'Invalid status' 
       });
     }
 
@@ -199,8 +193,8 @@ const updateUserStatus = async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ 
-        success: false, 
-        error: 'Utilisateur non trouvé' 
+        error: 'NotFound', 
+        message: 'User not found' 
       });
     }
 
@@ -228,10 +222,14 @@ const updateUserStatus = async (req, res) => {
       );
     }
 
-    res.json({ 
-      success: true, 
-      data: user,
-      message: `Statut de l'utilisateur mis à jour vers ${status}`
+    res.json({
+      _id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      role: user.role,
+      status: user.status,
+      updatedAt: user.updatedAt
     });
   } catch (error) {
     console.error('Erreur updateUserStatus:', error);
@@ -270,6 +268,9 @@ const getUserStats = async (req, res) => {
           invited: {
             $sum: { $cond: [{ $eq: ['$status', 'invited'] }, 1, 0] }
           },
+          verified: {
+            $sum: { $cond: [{ $eq: ['$status', 'verified'] }, 1, 0] }
+          },
           suspended: {
             $sum: { $cond: [{ $eq: ['$status', 'suspended'] }, 1, 0] }
           }
@@ -300,20 +301,29 @@ const getUserStats = async (req, res) => {
       }
     ]);
 
+    const overview = stats[0] || {
+      total: 0,
+      students: 0,
+      professors: 0,
+      admins: 0,
+      reglo: 0,
+      pending: 0,
+      invited: 0,
+      verified: 0,
+      suspended: 0
+    };
+
     res.json({
-      success: true,
-      data: {
-        overview: stats[0] || {
-          total: 0,
-          students: 0,
-          professors: 0,
-          admins: 0,
-          reglo: 0,
-          pending: 0,
-          invited: 0,
-          suspended: 0
-        },
-        monthly: monthlyStats
+      total: overview.total,
+      students: overview.students,
+      professors: overview.professors,
+      admins: overview.admins,
+      byStatus: {
+        invited: overview.invited,
+        pending: overview.pending,
+        verified: overview.verified,
+        reglo: overview.reglo,
+        suspended: overview.suspended
       }
     });
   } catch (error) {
@@ -321,6 +331,45 @@ const getUserStats = async (req, res) => {
     res.status(500).json({ 
       success: false, 
       error: 'Erreur lors de la récupération des statistiques' 
+    });
+  }
+};
+
+// @desc    Change user role (admin only)
+// @route   PATCH /api/users/:id/role
+// @access  Admin only
+const changeUserRole = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+
+    const validRoles = ['student', 'professor', 'admin'];
+    if (!role || !validRoles.includes(role)) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'Valid role is required (student, professor, admin)'
+      });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      id,
+      { role, ...(role !== 'admin' ? { adminLevel: null } : {}) },
+      { new: true, runValidators: true }
+    ).select('-password -emailVerificationToken -passwordResetToken');
+
+    if (!user) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'User not found'
+      });
+    }
+
+    res.json(user);
+  } catch (error) {
+    console.error('Erreur changeUserRole:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors du changement de rôle'
     });
   }
 };
@@ -335,7 +384,7 @@ const getMyProfile = async (req, res) => {
       .populate('studentInfo.enrolledCourses', 'title description')
       .populate('professorInfo.courses', 'title description');
 
-    res.json({ success: true, data: user });
+    res.json(user);
   } catch (error) {
     console.error('Erreur getMyProfile:', error);
     res.status(500).json({ 
@@ -368,11 +417,7 @@ const updateMyProfile = async (req, res) => {
       { new: true, runValidators: true }
     ).select('-password -emailVerificationToken -passwordResetToken');
 
-    res.json({ 
-      success: true, 
-      data: user,
-      message: 'Profil mis à jour avec succès'
-    });
+    res.json(user);
   } catch (error) {
     console.error('Erreur updateMyProfile:', error);
     res.status(500).json({ 
@@ -388,6 +433,7 @@ module.exports = {
   updateUser,
   deleteUser,
   updateUserStatus,
+  changeUserRole,
   getUserStats,
   getMyProfile,
   updateMyProfile

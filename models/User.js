@@ -43,7 +43,7 @@ const userSchema = new mongoose.Schema({
   },
   adminLevel: {
     type: String,
-    enum: ['super', 'content', 'support'],
+    enum: ['super', 'content', 'support', 'full'],
     default: null
   },
   status: {
@@ -117,6 +117,8 @@ const userSchema = new mongoose.Schema({
   emailVerificationExpires: Date,
   passwordResetToken: String,
   passwordResetExpires: Date,
+  refreshToken: String,
+  refreshTokenExpires: Date,
   lastLogin: Date,
   loginAttempts: {
     type: Number,

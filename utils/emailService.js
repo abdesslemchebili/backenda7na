@@ -1,9 +1,9 @@
 const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 
-// Configuration du transporteur email
+// Configuration du transporteur email (API nodemailer : createTransport, pas createTransporter)
 const createTransporter = () => {
-  return nodemailer.createTransporter({
+  return nodemailer.createTransport({
     host: process.env.EMAIL_HOST,
     port: process.env.EMAIL_PORT,
     secure: process.env.EMAIL_PORT === '465', // true pour 465, false pour les autres ports
@@ -206,27 +206,36 @@ const emailTemplates = {
 const sendEmail = async (to, template, language = 'en', customData = {}) => {
   try {
     const transporter = createTransporter();
-    
-    const emailTemplate = emailTemplates[template];
+
+    let emailTemplate = emailTemplates[template];
     if (!emailTemplate) {
       throw new Error(`Template d'email '${template}' non trouvé`);
     }
 
-    const subject = emailTemplate.subject[language] || emailTemplate.subject.en;
-    const html = emailTemplate.html[language] || emailTemplate.html.en;
+    // Les templates sont des fonctions : les appeler avec customData pour obtenir subject/html
+    if (typeof emailTemplate === 'function') {
+      const args = [customData];
+      if (template === 'userInvitation') args.push(customData.tempPassword, customData.inviteUrl);
+      else if (template === 'emailVerification') args.push(customData.verificationUrl);
+      else if (template === 'passwordReset') args.push(customData.resetUrl);
+      else if (template === 'paymentStatusUpdate') args.push(customData.newStatus);
+      emailTemplate = emailTemplate(...args);
+    }
 
-    // Remplacer les variables dans le template
-    let finalHtml = html;
+    const subject = emailTemplate.subject[language] || emailTemplate.subject.en;
+    let html = emailTemplate.html[language] || emailTemplate.html.en;
+
+    // Remplacer les variables restantes dans le template (pour templates objet)
     Object.keys(customData).forEach(key => {
       const regex = new RegExp(`\\$\\{${key}\\}`, 'g');
-      finalHtml = finalHtml.replace(regex, customData[key]);
+      html = html.replace(regex, customData[key]);
     });
 
     const mailOptions = {
       from: process.env.EMAIL_FROM,
       to: to,
       subject: subject,
-      html: finalHtml
+      html: html
     };
 
     const result = await transporter.sendMail(mailOptions);
@@ -257,7 +266,9 @@ const sendUserInvitation = async (userData, tempPassword, language = 'en') => {
 };
 
 const sendEmailVerification = async (userData, language = 'en') => {
-  const verificationUrl = `${process.env.FRONTEND_URL}/auth/verify?token=${userData.emailVerificationToken}`;
+  // Lien direct vers l'API : au clic, le backend vérifie puis redirige vers le frontend
+  const apiBase = process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`;
+  const verificationUrl = `${apiBase}/api/auth/verify?token=${userData.emailVerificationToken}`;
   
   return sendEmail(
     userData.email,

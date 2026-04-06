@@ -48,7 +48,6 @@ const getAllApplications = async (req, res) => {
     const total = await Application.countDocuments(filters);
 
     res.json({
-      success: true,
       data: applications,
       pagination: {
         page: parseInt(page),
@@ -90,7 +89,7 @@ const getApplicationById = async (req, res) => {
       });
     }
 
-    res.json({ success: true, data: application });
+    res.json(application);
   } catch (error) {
     console.error('Erreur getApplicationById:', error);
     res.status(500).json({ 
@@ -147,11 +146,7 @@ const createApplication = async (req, res) => {
       );
     }
 
-    res.status(201).json({ 
-      success: true, 
-      data: application,
-      message: 'Candidature soumise avec succès'
-    });
+    res.status(201).json(application);
   } catch (error) {
     console.error('Erreur createApplication:', error);
     res.status(500).json({ 
@@ -183,10 +178,17 @@ const updateApplication = async (req, res) => {
       { new: true, runValidators: true }
     ).populate('evaluatedBy', 'firstName lastName email');
 
-    res.json({ 
-      success: true, 
-      data: updatedApplication,
-      message: 'Candidature mise à jour avec succès'
+    res.json({
+      _id: updatedApplication._id,
+      applicant: {
+        firstName: updatedApplication.applicant.firstName,
+        lastName: updatedApplication.applicant.lastName,
+        email: updatedApplication.applicant.email
+      },
+      status: updatedApplication.status,
+      priority: updatedApplication.priority,
+      tags: updatedApplication.tags,
+      updatedAt: updatedApplication.updatedAt
     });
   } catch (error) {
     console.error('Erreur updateApplication:', error);
@@ -264,10 +266,15 @@ const updateStatus = async (req, res) => {
     const populatedApplication = await Application.findById(id)
       .populate('evaluation.reviewedBy', 'firstName lastName email');
 
-    res.json({ 
-      success: true, 
-      data: populatedApplication,
-      message: `Statut de la candidature mis à jour vers ${status}`
+    res.json({
+      _id: populatedApplication._id,
+      applicant: {
+        firstName: populatedApplication.applicant.firstName,
+        lastName: populatedApplication.applicant.lastName,
+        email: populatedApplication.applicant.email
+      },
+      status: populatedApplication.status,
+      updatedAt: populatedApplication.updatedAt
     });
   } catch (error) {
     console.error('Erreur updateStatus:', error);
@@ -313,9 +320,7 @@ const addCommunication = async (req, res) => {
     }
 
     res.json({ 
-      success: true, 
-      data: communication,
-      message: 'Communication ajoutée avec succès'
+      message: 'Communication added successfully'
     });
   } catch (error) {
     console.error('Erreur addCommunication:', error);
@@ -360,9 +365,7 @@ const scheduleTest = async (req, res) => {
     );
 
     res.json({ 
-      success: true, 
-      data: test,
-      message: 'Test programmé avec succès'
+      message: 'Test scheduled successfully'
     });
   } catch (error) {
     console.error('Erreur scheduleTest:', error);
@@ -426,9 +429,7 @@ const evaluateApplication = async (req, res) => {
       .populate('evaluation.reviewedBy', 'firstName lastName email');
 
     res.json({ 
-      success: true, 
-      data: populatedApplication,
-      message: 'Évaluation ajoutée avec succès'
+      message: 'Evaluation submitted successfully'
     });
   } catch (error) {
     console.error('Erreur evaluateApplication:', error);
@@ -494,20 +495,22 @@ const getApplicationStats = async (req, res) => {
       }
     ]);
 
+    const overview = stats[0] || {
+      total: 0,
+      pending: 0,
+      under_review: 0,
+      approved: 0,
+      rejected: 0,
+      shortlisted: 0,
+      withdrawn: 0
+    };
+
     res.json({
-      success: true,
-      data: {
-        overview: stats[0] || {
-          total: 0,
-          pending: 0,
-          under_review: 0,
-          approved: 0,
-          rejected: 0,
-          shortlisted: 0,
-          withdrawn: 0
-        },
-        monthly: monthlyStats
-      }
+      total: overview.total,
+      pending: overview.pending,
+      underReview: overview.under_review,
+      approved: overview.approved,
+      rejected: overview.rejected
     });
   } catch (error) {
     console.error('Erreur getApplicationStats:', error);

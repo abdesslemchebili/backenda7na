@@ -75,7 +75,6 @@ const getAllCourses = async (req, res) => {
     const total = await Course.countDocuments(filters);
 
     res.json({
-      success: true,
       data: courses,
       pagination: {
         page: parseInt(page),
@@ -105,8 +104,8 @@ const getCourseById = async (req, res) => {
 
     if (!course) {
       return res.status(404).json({ 
-        success: false, 
-        error: 'Cours non trouvé' 
+        error: 'NotFound', 
+        message: 'Course not found' 
       });
     }
 
@@ -138,7 +137,7 @@ const getCourseById = async (req, res) => {
       }
     }
 
-    res.json({ success: true, data: course });
+    res.json(course);
   } catch (error) {
     console.error('Erreur getCourseById:', error);
     res.status(500).json({ 
@@ -180,11 +179,7 @@ const createCourse = async (req, res) => {
     const populatedCourse = await Course.findById(course._id)
       .populate('professor', 'firstName lastName email');
 
-    res.status(201).json({ 
-      success: true, 
-      data: populatedCourse,
-      message: 'Cours créé avec succès'
-    });
+    res.status(201).json(populatedCourse);
   } catch (error) {
     console.error('Erreur createCourse:', error);
     res.status(500).json({ 
@@ -224,11 +219,7 @@ const updateCourse = async (req, res) => {
       { new: true, runValidators: true }
     ).populate('professor', 'firstName lastName email');
 
-    res.json({ 
-      success: true, 
-      data: updatedCourse,
-      message: 'Cours mis à jour avec succès'
-    });
+    res.json(updatedCourse);
   } catch (error) {
     console.error('Erreur updateCourse:', error);
     res.status(500).json({ 
@@ -279,8 +270,7 @@ const deleteCourse = async (req, res) => {
     await Course.findByIdAndDelete(id);
 
     res.json({ 
-      success: true, 
-      message: 'Cours supprimé avec succès' 
+      message: 'Course deleted successfully' 
     });
   } catch (error) {
     console.error('Erreur deleteCourse:', error);
@@ -302,8 +292,14 @@ const enrollStudent = async (req, res) => {
     // Vérifier que l'utilisateur peut s'inscrire
     if (req.user.role !== 'student') {
       return res.status(403).json({ 
-        success: false, 
-        error: 'Seuls les étudiants peuvent s\'inscrire aux cours' 
+        error: 'Forbidden', 
+        message: 'Only students can enroll' 
+      });
+    }
+    if (req.user.status !== 'reglo') {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Only students with payment confirmed (reglo) can enroll'
       });
     }
 
@@ -351,8 +347,7 @@ const enrollStudent = async (req, res) => {
     );
 
     res.json({ 
-      success: true, 
-      message: 'Inscription réussie au cours'
+      message: 'Enrolled successfully'
     });
   } catch (error) {
     console.error('Erreur enrollStudent:', error);
@@ -365,42 +360,45 @@ const enrollStudent = async (req, res) => {
 
 // @desc    Désinscrire un étudiant d'un cours
 // @route   DELETE /api/courses/:id/enroll
-// @access  Étudiants seulement
+// @access  Student (self), Professor (owner), Admin (optional studentId)
 const unenrollStudent = async (req, res) => {
   try {
     const { id } = req.params;
+    const { studentId } = req.query;
 
     const course = await Course.findById(id);
     if (!course) {
       return res.status(404).json({ 
-        success: false, 
-        error: 'Cours non trouvé' 
+        error: 'NotFound', 
+        message: 'Course not found' 
       });
     }
 
-    // Vérifier si l'étudiant est inscrit
+    let targetStudentId = req.user._id;
+    if (studentId && (req.user.role === 'admin' || (req.user.role === 'professor' && course.professor.toString() === req.user._id.toString()))) {
+      targetStudentId = studentId;
+    } else if (studentId) {
+      return res.status(403).json({ error: 'Forbidden', message: 'Only professor or admin can unenroll another student' });
+    }
+
     const isEnrolled = course.enrolledStudents.some(
-      enrollment => enrollment.student.toString() === req.user._id.toString()
+      enrollment => enrollment.student.toString() === targetStudentId.toString()
     );
     if (!isEnrolled) {
       return res.status(400).json({ 
-        success: false, 
-        error: 'Vous n\'êtes pas inscrit à ce cours' 
+        error: 'BadRequest', 
+        message: 'Student is not enrolled in this course' 
       });
     }
 
-    // Utiliser la méthode du modèle pour désinscrire l'étudiant
-    await course.unenrollStudent(req.user._id);
-
-    // Retirer le cours de l'étudiant
+    await course.unenrollStudent(targetStudentId);
     await User.findByIdAndUpdate(
-      req.user._id,
+      targetStudentId,
       { $pull: { 'studentInfo.enrolledCourses': id } }
     );
 
     res.json({ 
-      success: true, 
-      message: 'Désinscription réussie du cours'
+      message: 'Unenrolled successfully'
     });
   } catch (error) {
     console.error('Erreur unenrollStudent:', error);
@@ -439,8 +437,7 @@ const updateProgress = async (req, res) => {
     await course.updateStudentProgress(studentId, progress);
 
     res.json({ 
-      success: true, 
-      message: 'Progrès mis à jour avec succès'
+      message: 'Progress updated successfully'
     });
   } catch (error) {
     console.error('Erreur updateProgress:', error);
@@ -467,7 +464,6 @@ const getFeaturedCourses = async (req, res) => {
     .sort({ createdAt: -1 });
 
     res.json({
-      success: true,
       data: courses
     });
   } catch (error) {
@@ -485,30 +481,34 @@ const getFeaturedCourses = async (req, res) => {
 const searchCourses = async (req, res) => {
   try {
     const { 
+      search,
       q, 
       language, 
       level, 
       category,
       page = 1, 
-      limit = 10 
+      limit = 10,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
     } = req.query;
 
-    if (!q) {
+    const query = search || q;
+    if (!query) {
       return res.status(400).json({ 
-        success: false, 
-        error: 'Terme de recherche requis' 
+        error: 'BadRequest', 
+        message: 'Search term is required' 
       });
     }
 
     const filters = {
       status: 'published',
       $or: [
-        { 'title.en': { $regex: q, $options: 'i' } },
-        { 'title.fr': { $regex: q, $options: 'i' } },
-        { 'title.ar': { $regex: q, $options: 'i' } },
-        { 'description.en': { $regex: q, $options: 'i' } },
-        { 'description.fr': { $regex: q, $options: 'i' } },
-        { 'description.ar': { $regex: q, $options: 'i' } }
+        { 'title.en': { $regex: query, $options: 'i' } },
+        { 'title.fr': { $regex: query, $options: 'i' } },
+        { 'title.ar': { $regex: query, $options: 'i' } },
+        { 'description.en': { $regex: query, $options: 'i' } },
+        { 'description.fr': { $regex: query, $options: 'i' } },
+        { 'description.ar': { $regex: query, $options: 'i' } }
       ]
     };
 
@@ -517,17 +517,18 @@ const searchCourses = async (req, res) => {
     if (category) filters.category = category;
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
+    const sort = {};
+    sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
 
     const courses = await Course.find(filters)
       .skip(skip)
       .limit(parseInt(limit))
       .populate('professor', 'firstName lastName email')
-      .sort({ createdAt: -1 });
+      .sort(sort);
 
     const total = await Course.countDocuments(filters);
 
     res.json({
-      success: true,
       data: courses,
       pagination: {
         page: parseInt(page),
