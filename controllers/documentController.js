@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const Document = require('../models/Document');
 const Course = require('../models/Course');
+const { buildSignedFileUrl, getSignedUrlExpiryIso } = require('../utils/fileAccess');
 
 // POST /api/courses/:courseId/documents - upload document
 const uploadDocument = async (req, res) => {
@@ -22,10 +23,9 @@ const uploadDocument = async (req, res) => {
     const ext = path.extname(req.file.originalname).toLowerCase();
     const docType = req.body.type || typeMap[ext] || 'other';
     const relativePath = `/uploads/documents/${req.file.filename}`;
-    const baseUrl = process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`;
     const doc = new Document({
       title: { en: titleEn, fr: '', ar: '' },
-      url: baseUrl + relativePath,
+      url: relativePath,
       type: docType,
       size: req.file.size || 0,
       course: courseId,
@@ -103,9 +103,15 @@ const downloadDocument = async (req, res) => {
     if (!isProfessor && !isAdmin && !isEnrolled) {
       return res.status(403).json({ error: 'Forbidden', message: 'Not authorized' });
     }
-    const url = doc.url;
-    const filename = (doc.title && doc.title.en) ? `${doc.title.en}.${doc.type || 'pdf'}` : (doc.url.split('/').pop() || 'document');
-    res.json({ url, expiresAt: new Date(Date.now() + 3600000).toISOString(), filename });
+    const filename = (doc.title && doc.title.en)
+      ? `${doc.title.en}.${doc.type || 'pdf'}`
+      : (doc.url.split('/').pop() || 'document');
+    const url = buildSignedFileUrl(doc.url, req.user._id, req);
+    res.json({
+      url,
+      expiresAt: getSignedUrlExpiryIso(),
+      filename
+    });
   } catch (err) {
     console.error('downloadDocument:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err.message });
@@ -137,9 +143,11 @@ const uploadImage = async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'BadRequest', message: 'File is required' });
     }
-    const baseUrl = process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`;
-    const url = `${baseUrl}/uploads/images/${req.file.filename}`;
-    res.json({ url });
+    const relativePath = `/uploads/images/${req.file.filename}`;
+    res.json({
+      url: relativePath,
+      signedUrl: buildSignedFileUrl(relativePath, req.user._id, req)
+    });
   } catch (err) {
     console.error('uploadImage:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err.message });

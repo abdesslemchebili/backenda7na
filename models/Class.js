@@ -172,7 +172,9 @@ const classSchema = new mongoose.Schema({
       default: false
     },
     recordingStarted: Boolean,
-    recordingUrl: String
+    recordingUrl: String,
+    sessionStartedAt: Date,
+    sessionEndedAt: Date
   },
 
   // Matériaux et ressources

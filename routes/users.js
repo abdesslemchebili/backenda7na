@@ -25,11 +25,11 @@ router.put('/profile', authenticateToken, updateMyProfile);
 router.get('/me/attendance', authenticateToken, attendanceController.getByStudent);
 
 // Routes admin seulement
-router.get('/', authenticateToken, authorizeRoles('admin'), getAllUsers);
-router.get('/stats/overview', authenticateToken, authorizeRoles('admin'), getUserStats);
-router.delete('/:id', authenticateToken, authorizeRoles('admin'), deleteUser);
-router.patch('/:id/status', authenticateToken, authorizeRoles('admin'), updateUserStatus);
-router.patch('/:id/role', authenticateToken, authorizeRoles('admin'), changeUserRole);
+router.get('/', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full', 'support'), getAllUsers);
+router.get('/stats/overview', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full', 'support'), getUserStats);
+router.delete('/:id', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full'), deleteUser);
+router.patch('/:id/status', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full', 'support'), updateUserStatus);
+router.patch('/:id/role', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super'), changeUserRole);
 
 // Routes pour admin ou propriétaire du profil
 router.get('/:id', authenticateToken, requireUserOwnership, getUserById);

@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const { GERMAN_SUB_LEVELS, GERMAN_LEVELS, PAYMENT_STATUSES } = require('../constants/germanLevels');
 
 const userSchema = new mongoose.Schema({
   // Informations de base
@@ -32,6 +33,27 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true,
     match: [/^[\+]?[1-9][\d]{0,15}$/, 'Veuillez entrer un numéro de téléphone valide']
+  },
+  username: {
+    type: String,
+    unique: true,
+    sparse: true,
+    trim: true,
+    lowercase: true
+  },
+  country: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  mustChangePassword: {
+    type: Boolean,
+    default: false
+  },
+  paymentStatus: {
+    type: String,
+    enum: PAYMENT_STATUSES,
+    default: 'PENDING_PAYMENT'
   },
 
   // Rôles et statuts
@@ -66,6 +88,30 @@ const userSchema = new mongoose.Schema({
       enum: ['beginner', 'intermediate', 'advanced'],
       default: 'beginner'
     },
+    germanSubLevel: {
+      type: String,
+      enum: GERMAN_SUB_LEVELS,
+      default: null
+    },
+    placementLevel: {
+      type: String,
+      enum: GERMAN_LEVELS,
+      default: null
+    },
+    placementTestCompleted: {
+      type: Boolean,
+      default: false
+    },
+    classGroupId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ClassGroup',
+      default: null
+    },
+    education: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     languages: [{
       language: {
         type: String,
@@ -84,6 +130,11 @@ const userSchema = new mongoose.Schema({
 
   // Informations spécifiques aux professeurs
   professorInfo: {
+    hourlyRate: {
+      type: Number,
+      min: 0,
+      default: 0
+    },
     specialties: [{
       language: {
         type: String,

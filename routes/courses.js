@@ -5,6 +5,7 @@ const {
   optionalAuth,
   authorizeRoles, 
   requireStudentStatus,
+  requireRegloForStudents,
   requireCourseEnrollment 
 } = require('../middleware/auth');
 const {
@@ -29,9 +30,9 @@ router.get('/', optionalAuth, getAllCourses);
 router.get('/featured', getFeaturedCourses);
 router.get('/search', optionalAuth, searchCourses);
 // Course documents (before /:id so :courseId/documents matches)
-router.get('/:courseId/documents', authenticateToken, documentController.listByCourse);
+router.get('/:courseId/documents', authenticateToken, requireRegloForStudents, documentController.listByCourse);
 router.get('/:courseId/attendance', authenticateToken, attendanceController.getByCourse);
-router.get('/:courseId/assignments', authenticateToken, assignmentController.listByCourse);
+router.get('/:courseId/assignments', authenticateToken, requireRegloForStudents, assignmentController.listByCourse);
 router.post('/:courseId/documents', authenticateToken, authorizeRoles('professor', 'admin'), uploadDocMw, documentController.uploadDocument);
 router.post('/:courseId/assignments', authenticateToken, authorizeRoles('professor', 'admin'), assignmentController.createAssignment);
 router.get('/:id', optionalAuth, getCourseById);

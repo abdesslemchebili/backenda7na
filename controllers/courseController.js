@@ -1,6 +1,7 @@
 const Course = require('../models/Course');
 const User = require('../models/User');
 const Class = require('../models/Class');
+const ClassGroup = require('../models/ClassGroup');
 
 // @desc    Récupérer tous les cours (avec filtres)
 // @route   GET /api/courses
@@ -44,11 +45,26 @@ const getAllCourses = async (req, res) => {
       filters.status = 'published';
       filters.isPublic = true;
     } else if (req.user.role === 'student') {
-      // Les étudiants ne voient que les cours publics et ceux auxquels ils sont inscrits
-      filters.$or = [
-        { status: 'published', isPublic: true },
-        { 'enrolledStudents.student': req.user._id }
-      ];
+      const userDoc = await User.findById(req.user._id).select('studentInfo');
+      const courseIds = new Set();
+
+      const enrolledCourses = await Course.find({ 'enrolledStudents.student': req.user._id }).select('_id');
+      enrolledCourses.forEach((c) => courseIds.add(c._id.toString()));
+
+      if (userDoc?.studentInfo?.enrolledCourses?.length) {
+        userDoc.studentInfo.enrolledCourses.forEach((id) => courseIds.add(id.toString()));
+      }
+
+      if (userDoc?.studentInfo?.classGroupId) {
+        const group = await ClassGroup.findById(userDoc.studentInfo.classGroupId).select('courseId');
+        if (group?.courseId) courseIds.add(group.courseId.toString());
+      }
+
+      if (courseIds.size === 0) {
+        filters._id = { $in: [] };
+      } else {
+        filters._id = { $in: Array.from(courseIds) };
+      }
     } else if (req.user.role === 'professor') {
       // Les professeurs voient leurs propres cours et les cours publics
       filters.$or = [
@@ -122,10 +138,10 @@ const getCourseById = async (req, res) => {
       const isEnrolled = course.enrolledStudents.some(
         enrollment => enrollment.student.toString() === req.user._id.toString()
       );
-      if (course.status !== 'published' && !isEnrolled) {
-        return res.status(403).json({ 
-          success: false, 
-          error: 'Accès non autorisé à ce cours' 
+      if (!isEnrolled) {
+        return res.status(403).json({
+          error: 'Forbidden',
+          message: 'You are not enrolled in this course'
         });
       }
     } else if (req.user.role === 'professor') {

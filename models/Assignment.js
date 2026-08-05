@@ -18,6 +18,8 @@ const assignmentSchema = new mongoose.Schema({
   },
   dueAt: { type: Date, required: true },
   maxScore: { type: Number, default: 100 },
+  allowLateSubmission: { type: Boolean, default: false },
+  maxSubmissions: { type: Number, default: 1, min: 1 },
   type: { type: String, enum: ['essay', 'quiz', 'file', 'other'], default: 'essay' },
   attachments: [{ type: String }],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }

@@ -154,6 +154,25 @@ const checkStatus = (...statuses) => {
   };
 };
 
+// Bloquer les étudiants non "reglo" sur le contenu pédagogique (prof/admin passent)
+const requireRegloForStudents = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      error: 'Unauthorized',
+      message: 'Invalid or expired token'
+    });
+  }
+
+  if (req.user.role === 'student' && req.user.status !== 'reglo') {
+    return res.status(403).json({
+      error: 'Paiement requis',
+      message: 'Votre paiement doit être confirmé pour accéder à cette ressource. Veuillez contacter l\'administrateur.'
+    });
+  }
+
+  next();
+};
+
 // Middleware spécial pour les étudiants (doit être "reglo")
 const requireStudentStatus = (req, res, next) => {
   if (!req.user) {
@@ -311,6 +330,7 @@ module.exports = {
   authorizeRoles,
   authorizeAdminLevels,
   checkStatus,
+  requireRegloForStudents,
   requireStudentStatus,
   requireOwnership,
   requireUserOwnership,

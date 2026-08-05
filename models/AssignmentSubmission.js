@@ -14,6 +14,7 @@ const submissionSchema = new mongoose.Schema({
   content: String,
   fileUrl: String,
   comment: String,
+  attemptCount: { type: Number, default: 1 },
   submittedAt: { type: Date, default: Date.now },
   status: {
     type: String,

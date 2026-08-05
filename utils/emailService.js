@@ -163,6 +163,62 @@ const emailTemplates = {
     }
   }),
 
+  // Bienvenue étudiant (après approbation inscription)
+  studentWelcome: (userData, tempPassword, loginUrl) => ({
+    subject: {
+      en: 'Welcome to Nour Academy — Your Account',
+      fr: 'Bienvenue à l\'école Nourhen Albouchi — Votre compte',
+      ar: 'مرحباً بك في مدرسة نورهن البوشي'
+    },
+    html: {
+      en: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #2c3e50;">Welcome to Nour Academy!</h2>
+          <p>Hello ${userData.firstName},</p>
+          <p>Your enrollment request has been approved. Here are your login credentials:</p>
+          <ul>
+            <li><strong>Username:</strong> ${userData.username || userData.email}</li>
+            <li><strong>Email:</strong> ${userData.email}</li>
+            <li><strong>Temporary Password:</strong> ${tempPassword}</li>
+          </ul>
+          <p><a href="${loginUrl}" style="background-color: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Login to Platform</a></p>
+          <p>Please change your password on first login, then complete the placement test.</p>
+          <p>Best regards,<br>Nourhen Albouchi</p>
+        </div>
+      `,
+      fr: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #2c3e50;">Bienvenue à l'école Nourhen Albouchi !</h2>
+          <p>Bonjour ${userData.firstName},</p>
+          <p>Votre demande d'inscription a été approuvée. Voici vos identifiants :</p>
+          <ul>
+            <li><strong>Nom d'utilisateur :</strong> ${userData.username || userData.email}</li>
+            <li><strong>Email :</strong> ${userData.email}</li>
+            <li><strong>Mot de passe temporaire :</strong> ${tempPassword}</li>
+          </ul>
+          <p><a href="${loginUrl}" style="background-color: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Se connecter</a></p>
+          <p>Veuillez changer votre mot de passe lors de votre première connexion, puis compléter le test de placement.</p>
+          <p>Cordialement,<br>Nourhen Albouchi</p>
+        </div>
+      `,
+      ar: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; direction: rtl;">
+          <h2 style="color: #2c3e50;">مرحباً بك في مدرسة نورهن البوشي!</h2>
+          <p>مرحباً ${userData.firstName}،</p>
+          <p>تمت الموافقة على طلب التسجيل الخاص بك. إليك بيانات الدخول:</p>
+          <ul>
+            <li><strong>اسم المستخدم:</strong> ${userData.username || userData.email}</li>
+            <li><strong>البريد الإلكتروني:</strong> ${userData.email}</li>
+            <li><strong>كلمة المرور المؤقتة:</strong> ${tempPassword}</li>
+          </ul>
+          <p><a href="${loginUrl}" style="background-color: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">تسجيل الدخول</a></p>
+          <p>يرجى تغيير كلمة المرور عند أول تسجيل دخول، ثم إكمال اختبار تحديد المستوى.</p>
+          <p>مع أطيب التحيات،<br>نورهن البوشي</p>
+        </div>
+      `
+    }
+  }),
+
   // Notification de statut de paiement
   paymentStatusUpdate: (userData, newStatus) => ({
     subject: {
@@ -219,6 +275,7 @@ const sendEmail = async (to, template, language = 'en', customData = {}) => {
       else if (template === 'emailVerification') args.push(customData.verificationUrl);
       else if (template === 'passwordReset') args.push(customData.resetUrl);
       else if (template === 'paymentStatusUpdate') args.push(customData.newStatus);
+      else if (template === 'studentWelcome') args.push(customData.tempPassword, customData.loginUrl);
       emailTemplate = emailTemplate(...args);
     }
 
@@ -295,6 +352,17 @@ const sendPasswordReset = async (userData, language = 'en') => {
   );
 };
 
+const sendStudentWelcome = async (userData, tempPassword, language = 'fr') => {
+  const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
+  return sendEmail(userData.email, 'studentWelcome', language, {
+    firstName: userData.firstName,
+    username: userData.username,
+    email: userData.email,
+    tempPassword,
+    loginUrl
+  });
+};
+
 const sendPaymentStatusUpdate = async (userData, newStatus, language = 'en') => {
   return sendEmail(
     userData.email,
@@ -338,6 +406,7 @@ const generateTempPassword = () => {
 module.exports = {
   sendEmail,
   sendUserInvitation,
+  sendStudentWelcome,
   sendEmailVerification,
   sendPasswordReset,
   sendPaymentStatusUpdate,

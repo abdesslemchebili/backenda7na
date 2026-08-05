@@ -150,13 +150,21 @@ const getAdminDashboard = async (req, res) => {
       }
     });
 
+    const [presentOrLate, totalAttendance] = await Promise.all([
+      Attendance.countDocuments({ status: { $in: ['present', 'late'] } }),
+      Attendance.countDocuments({})
+    ]);
+    const attendanceRatePercent = totalAttendance
+      ? Math.round((presentOrLate / totalAttendance) * 100)
+      : 0;
+
     res.json({
       totalStudents: userStats.students,
       totalProfessors: userStats.professors,
       totalCourses: courseStats.total,
       activeSessionsCount: activeSessions,
       enrollmentGrowthPercent,
-      attendanceRatePercent: 94,
+      attendanceRatePercent,
       userStats: {
         total: userStats.total,
         students: userStats.students,

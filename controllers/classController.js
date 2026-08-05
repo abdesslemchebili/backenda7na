@@ -2,6 +2,16 @@ const Class = require('../models/Class');
 const Course = require('../models/Course');
 const User = require('../models/User');
 const ClassGroup = require('../models/ClassGroup');
+const {
+  generateLiveMeetingCredentials,
+  canHostStartSession,
+  assertLiveJoinAccess,
+  canProfessorHostClass,
+  ensureLiveConfigCredentials,
+  sanitizeClassLiveConfig,
+  isWithinJoinWindow
+} = require('../utils/liveSession');
+const { findProfessorScheduleConflicts } = require('../utils/scheduleConflicts');
 
 // @desc    Récupérer toutes les classes (avec filtres)
 // @route   GET /api/classes
@@ -135,7 +145,9 @@ const getClassById = async (req, res) => {
       }
     }
 
-    res.json(classItem);
+    const isHost = await canProfessorHostClass(req.user, classItem);
+    const sanitized = sanitizeClassLiveConfig(classItem, isHost);
+    res.json(sanitized);
   } catch (error) {
     console.error('Erreur getClassById:', error);
     res.status(500).json({ 
@@ -152,15 +164,15 @@ const createClass = async (req, res) => {
   try {
     const classData = { ...req.body };
 
-    // Assigner le professeur si non spécifié
-    if (!classData.professor) {
-      classData.professor = req.user._id;
-    }
-
+    // Assigner le professeur si non spécifié (cohorte prioritaire)
     if (classData.classGroupId) {
       const cg = await ClassGroup.findById(classData.classGroupId);
       if (!cg) {
         return res.status(400).json({ error: 'BadRequest', message: 'Class group not found' });
+      }
+      classData.professor = classData.professor || cg.professorId;
+      if (!classData.course && cg.courseId) {
+        classData.course = cg.courseId;
       }
       if (cg.professorId.toString() !== classData.professor.toString()) {
         return res.status(400).json({ error: 'BadRequest', message: 'Professor does not match the cohort' });
@@ -168,6 +180,25 @@ const createClass = async (req, res) => {
       if (cg.courseId && classData.course && cg.courseId.toString() !== classData.course.toString()) {
         return res.status(400).json({ error: 'BadRequest', message: 'Course does not match the cohort' });
       }
+    } else if (!classData.professor) {
+      classData.professor = req.user._id;
+    }
+
+    if (!classData.schedule?.startTime) {
+      return res.status(400).json({ error: 'BadRequest', message: 'schedule.startTime is required' });
+    }
+
+    const conflicts = await findProfessorScheduleConflicts(
+      classData.professor,
+      classData.schedule.startTime,
+      classData.schedule.endTime
+    );
+    if (conflicts.length) {
+      return res.status(409).json({
+        error: 'Conflict',
+        message: 'Professor has another session at this time',
+        conflicts
+      });
     }
 
     // Vérifier que l'utilisateur peut créer la classe
@@ -179,6 +210,17 @@ const createClass = async (req, res) => {
           error: 'Vous ne pouvez créer des classes que pour vos propres cours' 
         });
       }
+    }
+
+    if (classData.type === 'live') {
+      const creds = generateLiveMeetingCredentials();
+      classData.liveConfig = {
+        ...(classData.liveConfig || {}),
+        platform: 'custom',
+        meetingId: creds.meetingId,
+        meetingPassword: creds.meetingPassword,
+        waitingRoom: true
+      };
     }
 
     const classItem = new Class(classData);
@@ -336,13 +378,83 @@ const enrollStudent = async (req, res) => {
   }
 };
 
+// @desc    Get Jitsi join credentials for a live session
+// @route   GET /api/classes/:id/join-token
+// @access  Enrolled reglo students, session professor, admin
+const getJoinToken = async (req, res) => {
+  try {
+    const classItem = await Class.findById(req.params.id)
+      .populate('course', 'title')
+      .populate('professor', 'firstName lastName');
+
+    if (!classItem) {
+      return res.status(404).json({ error: 'NotFound', message: 'Class not found' });
+    }
+
+    const access = await assertLiveJoinAccess(req, classItem);
+    if (!access.ok) {
+      return res.status(access.status || 403).json({ error: 'Forbidden', message: access.message });
+    }
+
+    if (!classItem.liveConfig?.meetingId) {
+      const creds = ensureLiveConfigCredentials(classItem);
+      await Class.findByIdAndUpdate(classItem._id, {
+        'liveConfig.meetingId': creds.meetingId,
+        'liveConfig.meetingPassword': creds.meetingPassword,
+        'liveConfig.platform': 'custom'
+      });
+      classItem.liveConfig = { ...classItem.liveConfig, ...creds, platform: 'custom' };
+    }
+
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+    res.json({
+      roomName: classItem.liveConfig.meetingId,
+      roomPassword: access.isHost ? classItem.liveConfig.meetingPassword : undefined,
+      expiresAt,
+      sessionStatus: classItem.status,
+      joinWindowOpen: isWithinJoinWindow(classItem),
+      isHost: access.isHost,
+      title: classItem.title
+    });
+  } catch (error) {
+    console.error('Erreur getJoinToken:', error);
+    res.status(500).json({ error: 'Internal Server Error', message: 'Failed to get join credentials' });
+  }
+};
+
+// @desc    Check professor schedule conflicts
+// @route   GET /api/classes/schedule-conflicts
+// @access  Professor, Admin
+const getScheduleConflicts = async (req, res) => {
+  try {
+    const { professorId, startTime, endTime, excludeClassId } = req.query;
+    if (!professorId || !startTime) {
+      return res.status(400).json({ error: 'BadRequest', message: 'professorId and startTime are required' });
+    }
+    if (req.user.role === 'professor' && professorId !== req.user._id.toString()) {
+      return res.status(403).json({ error: 'Forbidden', message: 'Not authorized' });
+    }
+    const conflicts = await findProfessorScheduleConflicts(
+      professorId,
+      startTime,
+      endTime,
+      excludeClassId || null
+    );
+    res.json({ hasConflict: conflicts.length > 0, conflicts });
+  } catch (error) {
+    console.error('Erreur getScheduleConflicts:', error);
+    res.status(500).json({ error: 'Internal Server Error', message: 'Failed to check conflicts' });
+  }
+};
+
 // @desc    Start session (status → ongoing)
 // @route   POST /api/classes/:id/start
 // @access  Professor (owner), Admin
 const startSession = async (req, res) => {
   try {
     const { id } = req.params;
-    const { meetingUrl, recordingStarted } = req.body || {};
+    const { recordingStarted } = req.body || {};
 
     const classItem = await Class.findById(id);
     if (!classItem) {
@@ -357,19 +469,32 @@ const startSession = async (req, res) => {
     if (classItem.type !== 'live') {
       return res.status(400).json({ error: 'BadRequest', message: 'Only live sessions can be started' });
     }
+    if (classItem.status === 'cancelled' || classItem.status === 'completed') {
+      return res.status(400).json({ error: 'BadRequest', message: 'Session cannot be started' });
+    }
+
     const now = new Date();
-    if (classItem.schedule.startTime && classItem.schedule.startTime > now) {
-      return res.status(400).json({
-        error: 'BadRequest',
-        message: 'Session can only be started at or after scheduled time'
+    if (!canHostStartSession(classItem, now.getTime())) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Session can only be started within the join window (from 15 minutes before start)'
       });
     }
-    const update = { status: 'ongoing' };
-    if (meetingUrl) update['liveConfig.meetingUrl'] = meetingUrl;
+
+    const creds = ensureLiveConfigCredentials(classItem);
+    const update = {
+      status: 'ongoing',
+      'liveConfig.meetingId': creds.meetingId,
+      'liveConfig.meetingPassword': creds.meetingPassword,
+      'liveConfig.platform': 'custom',
+      'liveConfig.sessionStartedAt': now
+    };
     if (typeof recordingStarted === 'boolean') update['liveConfig.recordingStarted'] = recordingStarted;
+
     const updated = await Class.findByIdAndUpdate(id, update, { new: true })
       .populate('course', 'title')
       .populate('professor', 'firstName lastName email');
+
     res.json(updated);
   } catch (error) {
     console.error('Erreur startSession:', error);
@@ -395,7 +520,10 @@ const endSession = async (req, res) => {
         return res.status(403).json({ error: 'Forbidden', message: 'Not authorized to end this session' });
       }
     }
-    const update = { status: 'completed' };
+    const update = {
+      status: 'completed',
+      'liveConfig.sessionEndedAt': new Date()
+    };
     if (recordingUrl) update['liveConfig.recordingUrl'] = recordingUrl;
     const updated = await Class.findByIdAndUpdate(id, update, { new: true })
       .populate('course', 'title')
@@ -528,6 +656,8 @@ module.exports = {
   createClass,
   updateClass,
   deleteClass,
+  getJoinToken,
+  getScheduleConflicts,
   startSession,
   endSession,
   enrollStudent,

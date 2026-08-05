@@ -1,6 +1,8 @@
 const User = require('../models/User');
 const Course = require('../models/Course');
-const { sendEmail } = require('../utils/emailService');
+const { sendPaymentStatusUpdate } = require('../utils/emailService');
+const { enrollStudentFromAssignedClassGroup } = require('../utils/courseEnrollment');
+const { writeAuditLog } = require('../utils/auditLog');
 
 // @desc    Récupérer tous les utilisateurs (avec filtres)
 // @route   GET /api/users
@@ -185,9 +187,12 @@ const updateUserStatus = async (req, res) => {
       });
     }
 
+    const update = { status };
+    if (status === 'reglo') update.paymentStatus = 'PAYMENT_APPROVED';
+
     const user = await User.findByIdAndUpdate(
       id,
-      { status },
+      update,
       { new: true, runValidators: true }
     ).select('-password -emailVerificationToken -passwordResetToken');
 
@@ -198,28 +203,15 @@ const updateUserStatus = async (req, res) => {
       });
     }
 
-    // Envoyer un email de notification si le statut change
     if (status === 'reglo') {
-      await sendEmail(
-        user.email,
-        'Compte activé',
-        'votre_compte_est_active',
-        { 
-          firstName: user.firstName,
-          status: 'reglo',
-          reason: reason || 'Paiement confirmé'
-        }
-      );
-    } else if (status === 'suspended') {
-      await sendEmail(
-        user.email,
-        'Compte suspendu',
-        'compte_suspendu',
-        { 
-          firstName: user.firstName,
-          reason: reason || 'Violation des conditions d\'utilisation'
-        }
-      );
+      try {
+        await sendPaymentStatusUpdate(user, 'ACTIVE', user.preferences?.language || 'fr');
+      } catch (emailErr) {
+        console.error('Status email failed:', emailErr.message);
+      }
+      if (user.role === 'student') {
+        await enrollStudentFromAssignedClassGroup(user._id);
+      }
     }
 
     res.json({
@@ -340,8 +332,15 @@ const getUserStats = async (req, res) => {
 // @access  Admin only
 const changeUserRole = async (req, res) => {
   try {
+    if (req.user.adminLevel !== 'super') {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Only super administrators can change user roles'
+      });
+    }
+
     const { id } = req.params;
-    const { role } = req.body;
+    const { role, adminLevel } = req.body;
 
     const validRoles = ['student', 'professor', 'admin'];
     if (!role || !validRoles.includes(role)) {
@@ -351,18 +350,38 @@ const changeUserRole = async (req, res) => {
       });
     }
 
-    const user = await User.findByIdAndUpdate(
-      id,
-      { role, ...(role !== 'admin' ? { adminLevel: null } : {}) },
-      { new: true, runValidators: true }
-    ).select('-password -emailVerificationToken -passwordResetToken');
-
-    if (!user) {
-      return res.status(404).json({
-        error: 'NotFound',
-        message: 'User not found'
+    if (role === 'admin' && !adminLevel) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'adminLevel is required when assigning admin role'
       });
     }
+
+    const target = await User.findById(id).select('role adminLevel email firstName lastName');
+    if (!target) {
+      return res.status(404).json({ error: 'NotFound', message: 'User not found' });
+    }
+
+    const update = {
+      role,
+      adminLevel: role === 'admin' ? adminLevel : null
+    };
+
+    const user = await User.findByIdAndUpdate(id, update, { new: true, runValidators: true })
+      .select('-password -emailVerificationToken -passwordResetToken');
+
+    await writeAuditLog(req, {
+      action: 'user.role_change',
+      targetType: 'User',
+      targetId: user._id,
+      details: {
+        previousRole: target.role,
+        previousAdminLevel: target.adminLevel,
+        newRole: role,
+        newAdminLevel: update.adminLevel,
+        targetEmail: target.email
+      }
+    });
 
     res.json(user);
   } catch (error) {

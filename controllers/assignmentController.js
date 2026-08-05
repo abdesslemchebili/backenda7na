@@ -1,6 +1,37 @@
 const Assignment = require('../models/Assignment');
 const AssignmentSubmission = require('../models/AssignmentSubmission');
 const Course = require('../models/Course');
+const { buildSignedFileUrl } = require('../utils/fileAccess');
+const { notifyUser } = require('../utils/notifyUser');
+
+function localizeText(obj, lang = 'fr') {
+  if (!obj) return '';
+  return obj[lang] || obj.fr || obj.en || obj.ar || '';
+}
+
+function signSubmissionFile(sub, req) {
+  if (!sub) return sub;
+  const plain = sub.toObject ? sub.toObject() : { ...sub };
+  if (plain.fileUrl) {
+    try {
+      plain.fileUrl = buildSignedFileUrl(plain.fileUrl, req.user._id, req);
+    } catch {
+      delete plain.fileUrl;
+    }
+  }
+  return plain;
+}
+
+async function assertCourseProfessorOrAdmin(req, course) {
+  if (req.user.role === 'admin') return true;
+  return course.professor.toString() === req.user._id.toString();
+}
+
+async function assertStudentEnrolled(req, course) {
+  return course.enrolledStudents.some(
+    (e) => e.student && e.student.toString() === req.user._id.toString()
+  );
+}
 
 // POST /api/courses/:courseId/assignments
 const createAssignment = async (req, res) => {
@@ -8,7 +39,7 @@ const createAssignment = async (req, res) => {
     const { courseId } = req.params;
     const course = await Course.findById(courseId);
     if (!course) return res.status(404).json({ error: 'NotFound', message: 'Course not found' });
-    if (req.user.role === 'professor' && course.professor.toString() !== req.user._id.toString()) {
+    if (!(await assertCourseProfessorOrAdmin(req, course))) {
       return res.status(403).json({ error: 'Forbidden', message: 'Not authorized' });
     }
     const data = { ...req.body, course: courseId, createdBy: req.user._id };
@@ -21,23 +52,76 @@ const createAssignment = async (req, res) => {
   }
 };
 
+// PATCH /api/assignments/:id
+const updateAssignment = async (req, res) => {
+  try {
+    const assignment = await Assignment.findById(req.params.id);
+    if (!assignment) return res.status(404).json({ error: 'NotFound', message: 'Assignment not found' });
+    const course = await Course.findById(assignment.course);
+    if (!(await assertCourseProfessorOrAdmin(req, course))) {
+      return res.status(403).json({ error: 'Forbidden', message: 'Not authorized' });
+    }
+    const allowed = ['title', 'description', 'dueAt', 'maxScore', 'type', 'allowLateSubmission', 'maxSubmissions'];
+    allowed.forEach((key) => {
+      if (req.body[key] !== undefined) assignment[key] = req.body[key];
+    });
+    await assignment.save();
+    res.json(assignment);
+  } catch (err) {
+    console.error('updateAssignment:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+};
+
+// DELETE /api/assignments/:id
+const deleteAssignment = async (req, res) => {
+  try {
+    const assignment = await Assignment.findById(req.params.id);
+    if (!assignment) return res.status(404).json({ error: 'NotFound', message: 'Assignment not found' });
+    const course = await Course.findById(assignment.course);
+    if (!(await assertCourseProfessorOrAdmin(req, course))) {
+      return res.status(403).json({ error: 'Forbidden', message: 'Not authorized' });
+    }
+    await AssignmentSubmission.deleteMany({ assignment: assignment._id });
+    await assignment.deleteOne();
+    res.json({ message: 'Assignment deleted' });
+  } catch (err) {
+    console.error('deleteAssignment:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+};
+
 // GET /api/courses/:courseId/assignments
 const listByCourse = async (req, res) => {
   try {
     const { courseId } = req.params;
     const course = await Course.findById(courseId);
     if (!course) return res.status(404).json({ error: 'NotFound', message: 'Course not found' });
-    const isEnrolled = course.enrolledStudents.some(e => e.student && e.student.toString() === req.user._id.toString());
+    const isEnrolled = await assertStudentEnrolled(req, course);
     const isProfessor = course.professor.toString() === req.user._id.toString();
     if (!isEnrolled && !isProfessor && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Forbidden', message: 'Not authorized' });
     }
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, parseInt(req.query.limit) || 20);
-    const [data, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       Assignment.find({ course: courseId }).sort({ dueAt: 1 }).skip((page - 1) * limit).limit(limit).lean(),
       Assignment.countDocuments({ course: courseId })
     ]);
+
+    let data = rows;
+    if (req.user.role === 'student') {
+      const subs = await AssignmentSubmission.find({
+        assignment: { $in: rows.map((a) => a._id) },
+        student: req.user._id
+      }).lean();
+      const subMap = new Map(subs.map((s) => [s.assignment.toString(), s]));
+      data = rows.map((a) => ({
+        ...a,
+        mySubmission: signSubmissionFile(subMap.get(a._id.toString()), req)
+      }));
+    }
+
     res.json({ data, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
   } catch (err) {
     console.error('listByCourse:', err);
@@ -51,19 +135,46 @@ const submitAssignment = async (req, res) => {
     const assignment = await Assignment.findById(req.params.id).populate('course');
     if (!assignment) return res.status(404).json({ error: 'NotFound', message: 'Assignment not found' });
     const course = assignment.course;
-    const isEnrolled = course.enrolledStudents.some(e => e.student && e.student.toString() === req.user._id.toString());
+    const isEnrolled = await assertStudentEnrolled(req, course);
     if (!isEnrolled || req.user.role !== 'student') {
       return res.status(403).json({ error: 'Forbidden', message: 'Only enrolled students can submit' });
     }
+
+    const now = new Date();
+    if (assignment.dueAt && now > new Date(assignment.dueAt) && !assignment.allowLateSubmission) {
+      return res.status(403).json({ error: 'Forbidden', message: 'Submission deadline has passed' });
+    }
+
     const { content, comment } = req.body;
-    const fileUrl = req.file ? (process.env.API_URL || '') + '/uploads/documents/' + req.file.filename : req.body.fileUrl;
+    const fileUrl = req.file
+      ? `uploads/documents/${req.file.filename}`
+      : req.body.fileUrl;
+
+    if (!content && !fileUrl && !comment) {
+      return res.status(400).json({ error: 'BadRequest', message: 'Content or file is required' });
+    }
+
     let sub = await AssignmentSubmission.findOne({ assignment: assignment._id, student: req.user._id });
+
+    if (sub && sub.status === 'graded') {
+      return res.status(403).json({ error: 'Forbidden', message: 'Graded submissions cannot be changed' });
+    }
+
+    const maxAttempts = assignment.maxSubmissions || 1;
+    if (sub && sub.attemptCount >= maxAttempts) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: `Maximum number of submissions (${maxAttempts}) reached`
+      });
+    }
+
     if (sub) {
       sub.content = content !== undefined ? content : sub.content;
       sub.comment = comment !== undefined ? comment : sub.comment;
       if (fileUrl) sub.fileUrl = fileUrl;
-      sub.submittedAt = new Date();
+      sub.submittedAt = now;
       sub.status = 'submitted';
+      sub.attemptCount = (sub.attemptCount || 1) + 1;
       await sub.save();
     } else {
       sub = new AssignmentSubmission({
@@ -72,29 +183,36 @@ const submitAssignment = async (req, res) => {
         content: content || '',
         fileUrl: fileUrl || '',
         comment: comment || '',
-        status: 'submitted'
+        status: 'submitted',
+        attemptCount: 1
       });
       await sub.save();
     }
-    sub = await AssignmentSubmission.findById(sub._id).populate('assignment', 'title').populate('student', 'firstName lastName');
-    res.status(201).json(sub);
+
+    sub = await AssignmentSubmission.findById(sub._id)
+      .populate('assignment', 'title dueAt maxScore')
+      .populate('student', 'firstName lastName');
+    res.status(201).json(signSubmissionFile(sub, req));
   } catch (err) {
     console.error('submitAssignment:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err.message });
   }
 };
 
-// PATCH /api/assignments/submissions/:submissionId/grade or /api/submissions/:id/grade
+// PATCH /api/assignments/submissions/:submissionId/grade
 const gradeSubmission = async (req, res) => {
   try {
     const id = req.params.submissionId || req.params.id;
     const sub = await AssignmentSubmission.findById(id).populate('assignment');
     if (!sub) return res.status(404).json({ error: 'NotFound', message: 'Submission not found' });
     const course = await Course.findById(sub.assignment.course);
-    if (req.user.role === 'professor' && course.professor.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+    if (!(await assertCourseProfessorOrAdmin(req, course))) {
       return res.status(403).json({ error: 'Forbidden', message: 'Not authorized' });
     }
     const { score, maxScore, feedback } = req.body;
+    if (score === undefined || score === null) {
+      return res.status(400).json({ error: 'BadRequest', message: 'score is required' });
+    }
     sub.score = score;
     sub.maxScore = maxScore ?? sub.assignment.maxScore;
     sub.feedback = feedback;
@@ -102,9 +220,34 @@ const gradeSubmission = async (req, res) => {
     sub.gradedAt = new Date();
     sub.gradedBy = req.user._id;
     await sub.save();
+
+    const assignmentTitle = localizeText(sub.assignment.title);
+    await notifyUser(sub.student, {
+      title: {
+        fr: 'Devoir corrigé',
+        en: 'Assignment graded',
+        ar: 'تم تصحيح الواجب'
+      },
+      body: {
+        fr: `Votre devoir « ${assignmentTitle} » a été noté : ${score}/${sub.maxScore}.`,
+        en: `Your assignment "${assignmentTitle}" was graded: ${score}/${sub.maxScore}.`,
+        ar: `تم تقييم واجبك "${assignmentTitle}": ${score}/${sub.maxScore}.`
+      },
+      type: 'assignment_graded',
+      data: {
+        assignmentId: sub.assignment._id.toString(),
+        submissionId: sub._id.toString(),
+        courseId: course._id.toString(),
+        score,
+        maxScore: sub.maxScore
+      }
+    });
+
     const updated = await AssignmentSubmission.findById(sub._id)
-      .populate('assignment', 'title').populate('student', 'firstName lastName').populate('gradedBy', 'firstName lastName');
-    res.json(updated);
+      .populate('assignment', 'title')
+      .populate('student', 'firstName lastName')
+      .populate('gradedBy', 'firstName lastName');
+    res.json(signSubmissionFile(updated, req));
   } catch (err) {
     console.error('gradeSubmission:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err.message });
@@ -118,17 +261,27 @@ const getSubmissions = async (req, res) => {
     if (!assignment) return res.status(404).json({ error: 'NotFound', message: 'Assignment not found' });
     const course = assignment.course;
     const isProfessor = course.professor.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === 'admin';
     const filter = { assignment: assignment._id };
-    if (req.user.role === 'student' && !isProfessor && req.user.role !== 'admin') {
+    if (req.user.role === 'student' && !isProfessor && !isAdmin) {
       filter.student = req.user._id;
+    } else if (!isProfessor && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden', message: 'Not authorized' });
     }
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, parseInt(req.query.limit) || 20);
     if (req.query.status) filter.status = req.query.status;
-    const [data, total] = await Promise.all([
-      AssignmentSubmission.find(filter).populate('assignment', 'title').populate('student', 'firstName lastName').sort({ submittedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+    const [rows, total] = await Promise.all([
+      AssignmentSubmission.find(filter)
+        .populate('assignment', 'title maxScore dueAt')
+        .populate('student', 'firstName lastName email')
+        .sort({ submittedAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
       AssignmentSubmission.countDocuments(filter)
     ]);
+    const data = rows.map((row) => signSubmissionFile(row, req));
     res.json({ data, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
   } catch (err) {
     console.error('getSubmissions:', err);
@@ -136,4 +289,12 @@ const getSubmissions = async (req, res) => {
   }
 };
 
-module.exports = { createAssignment, listByCourse, submitAssignment, gradeSubmission, getSubmissions };
+module.exports = {
+  createAssignment,
+  updateAssignment,
+  deleteAssignment,
+  listByCourse,
+  submitAssignment,
+  gradeSubmission,
+  getSubmissions
+};

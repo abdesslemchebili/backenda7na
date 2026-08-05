@@ -3,7 +3,8 @@ const router = express.Router();
 const { 
   authenticateToken, 
   authorizeRoles, 
-  requireStudentStatus 
+  requireStudentStatus,
+  requireRegloForStudents
 } = require('../middleware/auth');
 const {
   getAllClasses,
@@ -11,19 +12,24 @@ const {
   createClass,
   updateClass,
   deleteClass,
+  getJoinToken,
+  getScheduleConflicts,
   startSession,
   endSession,
   enrollStudent,
+  markAttendance,
   getLiveClasses,
   getUpcomingClasses
 } = require('../controllers/classController');
 const attendanceController = require('../controllers/attendanceController');
 
 // Routes avec authentification
-router.get('/', authenticateToken, getAllClasses);
-router.get('/live', authenticateToken, getLiveClasses);
-router.get('/upcoming', authenticateToken, getUpcomingClasses);
-router.get('/:id', authenticateToken, getClassById);
+router.get('/', authenticateToken, requireRegloForStudents, getAllClasses);
+router.get('/live', authenticateToken, requireRegloForStudents, getLiveClasses);
+router.get('/schedule-conflicts', authenticateToken, authorizeRoles('professor', 'admin'), getScheduleConflicts);
+router.get('/upcoming', authenticateToken, requireRegloForStudents, getUpcomingClasses);
+router.get('/:id/join-token', authenticateToken, requireRegloForStudents, getJoinToken);
+router.get('/:id', authenticateToken, requireRegloForStudents, getClassById);
 
 // Routes pour professeurs et admins
 router.post('/', authenticateToken, authorizeRoles('professor', 'admin'), createClass);

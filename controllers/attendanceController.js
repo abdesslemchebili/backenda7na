@@ -2,8 +2,14 @@ const Attendance = require('../models/Attendance');
 const Class = require('../models/Class');
 const Course = require('../models/Course');
 const XLSX = require('xlsx');
+const {
+  professorOwnsCourse,
+  professorTeachesStudent,
+  studentEnrolledInClass,
+  assertExportAccess
+} = require('../utils/attendanceAuth');
 
-// POST /api/classes/:classId/attendance - mark attendance
+// POST /api/classes/:classId/attendance - mark attendance (professor/admin only)
 const markAttendance = async (req, res) => {
   try {
     const { classId } = req.params;
@@ -12,18 +18,40 @@ const markAttendance = async (req, res) => {
     if (!classDoc) {
       return res.status(404).json({ error: 'NotFound', message: 'Class not found' });
     }
+
     const course = await Course.findById(classDoc.course);
+    if (!course) {
+      return res.status(404).json({ error: 'NotFound', message: 'Course not found' });
+    }
+
     const isProfessor = req.user.role === 'professor' && course.professor.toString() === req.user._id.toString();
+    const isClassProfessor = classDoc.professor && classDoc.professor.toString() === req.user._id.toString();
     const isAdmin = req.user.role === 'admin';
-    if (!isProfessor && !isAdmin && req.user.role !== 'student') {
+
+    if (!isAdmin && !isProfessor && !isClassProfessor) {
       return res.status(403).json({ error: 'Forbidden', message: 'Not authorized' });
     }
-    const sid = studentId || (req.user.role === 'student' ? req.user._id : null);
-    if (!sid) {
+
+    if (!studentId) {
       return res.status(400).json({ error: 'BadRequest', message: 'studentId is required' });
     }
-    let att = await Attendance.findOne({ class: classId, student: sid });
-    const payload = { class: classId, student: sid, status: status || 'present', joinedAt: joinedAt ? new Date(joinedAt) : new Date(), leftAt: leftAt ? new Date(leftAt) : undefined };
+
+    const enrolled = await studentEnrolledInClass(studentId, classDoc);
+    if (!enrolled) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Student is not enrolled in this course'
+      });
+    }
+
+    let att = await Attendance.findOne({ class: classId, student: studentId });
+    const payload = {
+      class: classId,
+      student: studentId,
+      status: status || 'present',
+      joinedAt: joinedAt ? new Date(joinedAt) : new Date(),
+      leftAt: leftAt ? new Date(leftAt) : undefined
+    };
     if (att) {
       att = await Attendance.findByIdAndUpdate(att._id, payload, { new: true }).populate('class student');
     } else {
@@ -79,12 +107,31 @@ const getByStudent = async (req, res) => {
     if (req.user.role === 'student' && studentId !== req.user._id.toString()) {
       return res.status(403).json({ error: 'Forbidden', message: 'Can only view own attendance' });
     }
+
+    if (req.user.role === 'professor' && studentId !== req.user._id.toString()) {
+      const allowed = await professorTeachesStudent(req.user._id, studentId);
+      if (!allowed) {
+        return res.status(403).json({ error: 'Forbidden', message: 'Not authorized to view this student' });
+      }
+    }
+
     const { courseId, from, to, page = 1, limit = 20 } = req.query;
     const filter = { student: studentId };
     if (courseId) {
+      if (req.user.role === 'professor') {
+        const owns = await professorOwnsCourse(req.user._id, courseId);
+        if (!owns) {
+          return res.status(403).json({ error: 'Forbidden', message: 'Not authorized for this course' });
+        }
+      }
       const classIds = (await Class.find({ course: courseId }).select('_id')).map(c => c._id);
       filter.class = { $in: classIds };
+    } else if (req.user.role === 'professor') {
+      const courses = await Course.find({ professor: req.user._id }).select('_id');
+      const classIds = (await Class.find({ course: { $in: courses.map((c) => c._id) } }).select('_id')).map((c) => c._id);
+      filter.class = { $in: classIds };
     }
+
     if (from || to) {
       filter.createdAt = {};
       if (from) filter.createdAt.$gte = new Date(from);
@@ -110,6 +157,12 @@ const exportAttendance = async (req, res) => {
     if (!courseId && !classId) {
       return res.status(400).json({ error: 'BadRequest', message: 'courseId or classId required' });
     }
+
+    const access = await assertExportAccess(req, { courseId, classId });
+    if (!access.ok) {
+      return res.status(access.status || 403).json({ error: 'Forbidden', message: access.message });
+    }
+
     const filter = {};
     if (classId) filter.class = classId;
     else if (courseId) {
@@ -121,10 +174,7 @@ const exportAttendance = async (req, res) => {
       if (from) filter.createdAt.$gte = new Date(from);
       if (to) filter.createdAt.$lte = new Date(to);
     }
-    const course = courseId ? await Course.findById(courseId) : null;
-    if (course && req.user.role === 'professor' && course.professor.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ error: 'Forbidden', message: 'Not authorized' });
-    }
+
     const list = await Attendance.find(filter).populate('class', 'title schedule').populate('student', 'firstName lastName email').lean();
     if (format === 'csv') {
       const header = 'Class,Student,Status,Joined At,Left At\n';

@@ -89,12 +89,15 @@ const login = async (req, res) => {
       });
     }
 
-    // Vérifier le statut pour les étudiants
-    if (user.role === 'student' && user.status !== 'reglo') {
+    // Étudiants et professeurs : bloquer pending/suspended (pas encore approuvés)
+    if (['student', 'professor'].includes(user.role) && ['pending', 'suspended'].includes(user.status)) {
       return res.status(403).json({
         error: 'Forbidden',
-        message: 'Payment required to access the platform.',
-        paymentRequired: true,
+        message: user.status === 'suspended'
+          ? 'Your account has been suspended.'
+          : user.role === 'professor'
+            ? 'Your teacher account is pending approval.'
+            : 'Your enrollment is pending approval.',
         status: user.status
       });
     }
@@ -107,23 +110,26 @@ const login = async (req, res) => {
     user.refreshTokenExpires = refreshExpires;
     await user.save();
 
-    // Préparer la réponse selon la spécification API
+    const isActive = user.role === 'student' ? user.status === 'reglo' : true;
+
     const userResponse = {
       _id: user._id,
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
+      username: user.username || undefined,
       role: user.role,
       status: user.status,
+      paymentStatus: user.paymentStatus || undefined,
+      mustChangePassword: user.mustChangePassword || false,
       phone: user.phone || undefined,
+      country: user.country || undefined,
       avatar: user.avatar || undefined,
       bio: user.bio || { en: '', fr: '', ar: '' },
+      studentInfo: user.studentInfo || undefined,
       preferences: user.preferences || {
         language: 'en',
-        notifications: {
-          email: true,
-          push: true
-        }
+        notifications: { email: true, push: true }
       },
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
@@ -133,7 +139,11 @@ const login = async (req, res) => {
       token,
       refreshToken,
       expiresIn: getExpiresInSeconds(),
-      user: userResponse
+      user: userResponse,
+      mustChangePassword: user.mustChangePassword || false,
+      placementTestRequired: user.role === 'student' && !user.studentInfo?.placementTestCompleted,
+      paymentRequired: user.role === 'student' && user.status !== 'reglo',
+      isActive
     });
 
   } catch (error) {
@@ -575,17 +585,20 @@ const getProfile = async (req, res) => {
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
+      username: user.username || undefined,
       role: user.role,
       status: user.status,
+      paymentStatus: user.paymentStatus || undefined,
+      mustChangePassword: user.mustChangePassword || false,
       phone: user.phone || undefined,
+      country: user.country || undefined,
       avatar: user.avatar || undefined,
       bio: user.bio || { en: '', fr: '', ar: '' },
+      studentInfo: user.studentInfo || undefined,
+      professorInfo: user.professorInfo || undefined,
       preferences: user.preferences || {
         language: 'en',
-        notifications: {
-          email: true,
-          push: true
-        }
+        notifications: { email: true, push: true }
       },
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
@@ -631,7 +644,14 @@ const register = async (req, res) => {
       });
     }
 
-    // Vérifier le rôle
+    // Vérifier le rôle — inscription professeur réservée à l'admin
+    if (role === 'professor') {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Les comptes enseignant sont créés par l\'administration. Utilisez le formulaire « Devenir enseignant ».'
+      });
+    }
+
     if (role && !['student', 'professor'].includes(role)) {
       return res.status(400).json({
         error: 'Rôle invalide',
@@ -718,6 +738,43 @@ const register = async (req, res) => {
   }
 };
 
+// Changer le mot de passe (première connexion ou utilisateur connecté)
+const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    if (!newPassword || !confirmPassword) {
+      return res.status(400).json({ message: 'newPassword and confirmPassword are required' });
+    }
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ message: 'Passwords do not match' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (!user.mustChangePassword) {
+      if (!currentPassword) {
+        return res.status(400).json({ message: 'currentPassword is required' });
+      }
+      const valid = await user.comparePassword(currentPassword);
+      if (!valid) return res.status(401).json({ message: 'Current password is incorrect' });
+    }
+
+    user.password = newPassword;
+    user.mustChangePassword = false;
+    await user.save();
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('changePassword:', error);
+    res.status(500).json({ message: 'Failed to change password' });
+  }
+};
+
 module.exports = {
   login,
   register,
@@ -728,5 +785,6 @@ module.exports = {
   requestPasswordReset,
   resetPassword,
   resendVerificationEmail,
-  getProfile
+  getProfile,
+  changePassword
 }; 

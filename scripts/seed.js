@@ -9,6 +9,7 @@ const Class = require('../models/Class');
 const Application = require('../models/Application');
 const ClassGroup = require('../models/ClassGroup');
 const Lead = require('../models/Lead');
+const { PlacementTest } = require('../models/PlacementTest');
 
 // Fonction pour se connecter à MongoDB
 const connectDB = async () => {
@@ -32,6 +33,7 @@ const clearDatabase = async () => {
     await Application.deleteMany({});
     await ClassGroup.deleteMany({});
     await Lead.deleteMany({});
+    await PlacementTest.deleteMany({});
     console.log('🗑️ Base de données nettoyée');
   } catch (error) {
     console.error('❌ Erreur lors du nettoyage:', error);
@@ -152,6 +154,7 @@ const createUsers = async () => {
         },
         studentInfo: {
           level: 'intermediate',
+          placementTestCompleted: true,
           languages: [
             { language: 'english', level: 'intermediate' },
             { language: 'arabic', level: 'beginner' }
@@ -551,6 +554,7 @@ const seedDatabase = async () => {
     const classGroups = await createClassGroups(users, courses);
     const classes = await createClasses(courses, users, classGroups);
     const applications = await createApplications();
+    await createPlacementTest();
     
     console.log('\n🎉 Seeding terminé avec succès !');
     console.log(`📊 Statistiques:`);
@@ -575,6 +579,52 @@ const seedDatabase = async () => {
     console.error('❌ Erreur lors du seeding:', error);
     process.exit(1);
   }
+};
+
+const createPlacementTest = async () => {
+  await PlacementTest.create({
+    title: { en: 'German Placement Test', fr: 'Test de placement — Allemand' },
+    description: { en: 'Determine your CEFR level', fr: 'Déterminez votre niveau CEFR' },
+    isActive: true,
+    timeLimitMinutes: 45,
+    levelThresholds: [
+      { minScore: 0, level: 'A1' },
+      { minScore: 3, level: 'A2' },
+      { minScore: 6, level: 'B1' },
+      { minScore: 9, level: 'B2' },
+      { minScore: 12, level: 'C1' },
+      { minScore: 15, level: 'C2' }
+    ],
+    questions: [
+      {
+        type: 'multiple_choice',
+        question: { en: 'What is "Hello" in German?', fr: 'Comment dit-on "Bonjour" en allemand ?' },
+        options: ['Hallo', 'Danke', 'Tschüss', 'Bitte'],
+        correctAnswer: 'Hallo',
+        points: 1
+      },
+      {
+        type: 'multiple_choice',
+        question: { en: 'Choose the correct article: ___ Buch', fr: 'Choisissez l\'article : ___ Buch' },
+        options: ['der', 'die', 'das', 'den'],
+        correctAnswer: 'das',
+        points: 2
+      },
+      {
+        type: 'multiple_choice',
+        question: { en: '"Ich lerne Deutsch" means:', fr: '"Ich lerne Deutsch" signifie :' },
+        options: ['I speak German', 'I learn German', 'I teach German', 'I love German'],
+        correctAnswer: 'I learn German',
+        points: 2
+      },
+      {
+        type: 'text',
+        question: { en: 'Write a short sentence introducing yourself in German.', fr: 'Écrivez une courte phrase de présentation en allemand.' },
+        points: 3
+      }
+    ]
+  });
+  console.log('✅ Test de placement créé');
 };
 
 // Exécuter le seeding si le script est appelé directement
