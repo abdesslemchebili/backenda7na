@@ -41,6 +41,57 @@ En développement, Vite proxifie `/api` vers `http://localhost:5000`.
 
 ---
 
+## 2b. Déploiement Render (Web Service)
+
+### Erreurs fréquentes
+
+| Log Render | Cause | Correction |
+|------------|-------|------------|
+| `Running 'npm run dev'` + nodemon | Mauvaise **Start Command** | Mettre `npm start` (pas `npm run dev`) |
+| `ECONNREFUSED 127.0.0.1:27017` | Pas de base MongoDB distante | Définir `MONGODB_URI` (MongoDB Atlas) |
+| `No open ports detected` | L'app crash avant d'écouter | Corriger MongoDB + Start Command ci-dessus |
+
+### Paramètres du service (dashboard Render)
+
+| Champ | Valeur |
+|-------|--------|
+| **Build Command** | `npm install` |
+| **Start Command** | `npm start` |
+| **Health Check Path** | `/api/health` |
+
+Render injecte automatiquement `PORT` — ne pas le fixer manuellement sauf besoin particulier.
+
+### Variables d'environnement (obligatoires sur Render)
+
+```
+NODE_ENV=production
+MONGODB_URI=mongodb+srv://USER:PASSWORD@cluster.mongodb.net/language_school
+JWT_SECRET=<chaîne aléatoire ≥ 32 caractères>
+FRONTEND_URL=https://votre-frontend.vercel.app
+APP_URL=https://votre-frontend.vercel.app
+API_URL=https://votre-service.onrender.com
+```
+
+### MongoDB Atlas (gratuit)
+
+1. [mongodb.com/atlas](https://www.mongodb.com/atlas) → cluster M0 free.
+2. **Database Access** : utilisateur + mot de passe.
+3. **Network Access** → **Add IP Address** → **Allow Access from Anywhere** (`0.0.0.0/0`) pour que Render puisse se connecter.
+4. **Connect** → driver Node → copier l'URI et remplacer `<password>`.
+
+### Après déploiement
+
+```bash
+curl https://VOTRE-SERVICE.onrender.com/api/health
+# Attendu : {"status":"ok",...}
+```
+
+Le tier gratuit Render met le service en veille ; le premier appel peut prendre ~30 s.
+
+Un fichier `render.yaml` à la racine du repo documente la même config (Blueprint ou référence manuelle).
+
+---
+
 ## 3. Santé & monitoring
 
 - **Health check** : `GET /api/health`

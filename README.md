@@ -57,10 +57,13 @@ npm run seed
 ## Run the server
 
 ```bash
-npm run dev
-# or
-npm start
+npm run dev   # local only (nodemon)
+npm start     # production (Render, VPS, etc.)
 ```
+
+## Deploy on Render
+
+Use **Start Command** `npm start` (never `npm run dev`). Set `MONGODB_URI` to a MongoDB Atlas URI — localhost will not work on Render. Full checklist: [docs/GO_LIVE.md](docs/GO_LIVE.md#2b-déploiement-render-web-service).
 
 - Health: `GET http://localhost:5000/api/health`
 - Public lead capture: `POST http://localhost:5000/api/leads` (no auth)

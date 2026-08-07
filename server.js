@@ -3,12 +3,23 @@ const mongoose = require('mongoose');
 const app = require('./app');
 
 const connectDB = async () => {
-  try {
-    await mongoose.connect(
-      process.env.MONGODB_URI ||
-        process.env.DATABASE_URL ||
-        'mongodb://localhost:27017/language_school'
+  const uri =
+    process.env.MONGODB_URI ||
+    process.env.DATABASE_URL ||
+    (process.env.NODE_ENV === 'production'
+      ? null
+      : 'mongodb://localhost:27017/language_school');
+
+  if (!uri) {
+    console.error(
+      '❌ MONGODB_URI (ou DATABASE_URL) est requis en production. ' +
+        'Ajoutez-le dans les Environment Variables de Render / votre hébergeur.'
     );
+    process.exit(1);
+  }
+
+  try {
+    await mongoose.connect(uri);
     console.log('✅ Connexion à MongoDB établie');
   } catch (error) {
     console.error('❌ Erreur de connexion à MongoDB:', error.message);
