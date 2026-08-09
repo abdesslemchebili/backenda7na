@@ -125,7 +125,19 @@ const userSchema = new mongoose.Schema({
     enrolledCourses: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Course'
-    }]
+    }],
+    gamification: {
+      totalXp: { type: Number, default: 0 },
+      currentStreak: { type: Number, default: 0 },
+      longestStreak: { type: Number, default: 0 },
+      lastActivityDate: { type: Date, default: null },
+      gamesPlayed: { type: Number, default: 0 },
+      exercisesCompleted: { type: Number, default: 0 },
+      badges: [{
+        code: { type: String, required: true },
+        earnedAt: { type: Date, default: Date.now },
+      }],
+    }
   },
 
   // Informations spécifiques aux professeurs

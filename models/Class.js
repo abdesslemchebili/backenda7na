@@ -49,6 +49,12 @@ const classSchema = new mongoose.Schema({
     ref: 'ClassGroup',
     default: null
   },
+  /** Optional chapter link (from course book) */
+  chapterId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Chapter',
+    default: null
+  },
   professor: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -157,8 +163,8 @@ const classSchema = new mongoose.Schema({
   liveConfig: {
     platform: {
       type: String,
-      enum: ['zoom', 'teams', 'meet', 'custom'],
-      default: 'zoom'
+      enum: ['zoom', 'teams', 'meet', 'custom', 'livekit'],
+      default: 'livekit'
     },
     meetingUrl: String,
     meetingId: String,
@@ -278,6 +284,7 @@ classSchema.index({ course: 1 });
 classSchema.index({ professor: 1 });
 classSchema.index({ type: 1, status: 1 });
 classSchema.index({ 'schedule.startTime': 1 });
+classSchema.index({ chapterId: 1 });
 classSchema.index({ 'enrolledStudents.student': 1 });
 
 // Virtual pour vérifier si la classe est en cours

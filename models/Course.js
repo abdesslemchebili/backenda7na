@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { CEFR_LEVELS } = require('../constants/cefrLevels');
 
 const courseSchema = new mongoose.Schema({
   // Informations de base multilingues
@@ -64,6 +65,30 @@ const courseSchema = new mongoose.Schema({
     type: String,
     enum: ['beginner', 'intermediate', 'advanced'],
     required: true
+  },
+  /** Niveau CEFR (A1–C2) — complète le level legacy beginner/intermediate/advanced */
+  cefrLevel: {
+    type: String,
+    enum: [...CEFR_LEVELS, null],
+    default: null
+  },
+  /** Référence optionnelle vers le catalogue Language */
+  languageRef: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Language',
+    default: null
+  },
+  /** Référence optionnelle vers le catalogue Level */
+  levelRef: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Level',
+    default: null
+  },
+  /** Manuel / livre pédagogique lié au cours */
+  bookId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Book',
+    default: null
   },
   category: {
     type: String,
@@ -250,6 +275,8 @@ const courseSchema = new mongoose.Schema({
 // Index pour améliorer les performances
 courseSchema.index({ professor: 1 });
 courseSchema.index({ language: 1, level: 1 });
+courseSchema.index({ cefrLevel: 1 });
+courseSchema.index({ languageRef: 1, levelRef: 1 });
 courseSchema.index({ status: 1, isPublic: 1 });
 courseSchema.index({ featured: 1, status: 1 });
 courseSchema.index({ 'enrolledStudents.student': 1 });
@@ -265,12 +292,12 @@ courseSchema.virtual('finalPrice').get(function() {
 
 // Virtual pour le nombre d'étudiants inscrits
 courseSchema.virtual('enrolledCount').get(function() {
-  return this.enrolledStudents.length;
+  return (this.enrolledStudents || []).length;
 });
 
 // Virtual pour vérifier si le cours est complet
 courseSchema.virtual('isFull').get(function() {
-  return this.enrolledStudents.length >= this.maxStudents;
+  return (this.enrolledStudents || []).length >= this.maxStudents;
 });
 
 // Méthodes d'instance

@@ -2,6 +2,7 @@ const Class = require('../models/Class');
 const Course = require('../models/Course');
 const User = require('../models/User');
 const ClassGroup = require('../models/ClassGroup');
+const Recording = require('../models/Recording');
 const {
   generateLiveMeetingCredentials,
   canHostStartSession,
@@ -12,6 +13,16 @@ const {
   isWithinJoinWindow
 } = require('../utils/liveSession');
 const { findProfessorScheduleConflicts } = require('../utils/scheduleConflicts');
+const {
+  upsertSessionRecording,
+  attachRecordingToClass,
+  attachRecordingsToClasses,
+} = require('../utils/recordingHelper');
+const {
+  isLiveKitConfigured,
+  getLiveKitConfig,
+  createLiveKitToken,
+} = require('../utils/livekit');
 
 // @desc    Récupérer toutes les classes (avec filtres)
 // @route   GET /api/classes
@@ -81,12 +92,14 @@ const getAllClasses = async (req, res) => {
       .limit(parseInt(limit))
       .populate('course', 'title')
       .populate('professor', 'firstName lastName email')
+      .populate('chapterId', 'title displayTitle order')
       .populate('enrolledStudents.student', 'firstName lastName email');
 
     const total = await Class.countDocuments(filters);
+    const withRecordings = await attachRecordingsToClasses(classes);
 
     res.json({
-      data: classes,
+      data: withRecordings,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -112,6 +125,7 @@ const getClassById = async (req, res) => {
     const classItem = await Class.findById(id)
       .populate('course', 'title description')
       .populate('professor', 'firstName lastName email bio')
+      .populate('chapterId', 'title displayTitle order pageStart pageEnd')
       .populate('enrolledStudents.student', 'firstName lastName email');
 
     if (!classItem) {
@@ -147,7 +161,8 @@ const getClassById = async (req, res) => {
 
     const isHost = await canProfessorHostClass(req.user, classItem);
     const sanitized = sanitizeClassLiveConfig(classItem, isHost);
-    res.json(sanitized);
+    const withRecording = await attachRecordingToClass(sanitized);
+    res.json(withRecording);
   } catch (error) {
     console.error('Erreur getClassById:', error);
     res.status(500).json({ 
@@ -378,11 +393,18 @@ const enrollStudent = async (req, res) => {
   }
 };
 
-// @desc    Get Jitsi join credentials for a live session
+// @desc    Get LiveKit join credentials for a live session
 // @route   GET /api/classes/:id/join-token
 // @access  Enrolled reglo students, session professor, admin
 const getJoinToken = async (req, res) => {
   try {
+    if (!isLiveKitConfigured()) {
+      return res.status(503).json({
+        error: 'ServiceUnavailable',
+        message: 'LiveKit n\'est pas configuré. Définissez LIVEKIT_API_KEY, LIVEKIT_API_SECRET et LIVEKIT_URL.',
+      });
+    }
+
     const classItem = await Class.findById(req.params.id)
       .populate('course', 'title')
       .populate('professor', 'firstName lastName');
@@ -400,22 +422,33 @@ const getJoinToken = async (req, res) => {
       const creds = ensureLiveConfigCredentials(classItem);
       await Class.findByIdAndUpdate(classItem._id, {
         'liveConfig.meetingId': creds.meetingId,
-        'liveConfig.meetingPassword': creds.meetingPassword,
-        'liveConfig.platform': 'custom'
+        'liveConfig.platform': 'livekit',
       });
-      classItem.liveConfig = { ...classItem.liveConfig, ...creds, platform: 'custom' };
+      classItem.liveConfig = { ...classItem.liveConfig, meetingId: creds.meetingId, platform: 'livekit' };
     }
 
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const roomName = classItem.liveConfig.meetingId;
+    const displayName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Participant';
+    const token = await createLiveKitToken({
+      roomName,
+      identity: req.user._id.toString(),
+      displayName,
+      isHost: access.isHost,
+    });
+
+    const { url: serverUrl } = getLiveKitConfig();
+    const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 
     res.json({
-      roomName: classItem.liveConfig.meetingId,
-      roomPassword: access.isHost ? classItem.liveConfig.meetingPassword : undefined,
+      provider: 'livekit',
+      serverUrl,
+      token,
+      roomName,
       expiresAt,
       sessionStatus: classItem.status,
       joinWindowOpen: isWithinJoinWindow(classItem),
       isHost: access.isHost,
-      title: classItem.title
+      title: classItem.title,
     });
   } catch (error) {
     console.error('Erreur getJoinToken:', error);
@@ -485,17 +518,22 @@ const startSession = async (req, res) => {
     const update = {
       status: 'ongoing',
       'liveConfig.meetingId': creds.meetingId,
-      'liveConfig.meetingPassword': creds.meetingPassword,
-      'liveConfig.platform': 'custom',
+      'liveConfig.platform': 'livekit',
       'liveConfig.sessionStartedAt': now
     };
     if (typeof recordingStarted === 'boolean') update['liveConfig.recordingStarted'] = recordingStarted;
 
     const updated = await Class.findByIdAndUpdate(id, update, { new: true })
       .populate('course', 'title')
-      .populate('professor', 'firstName lastName email');
+      .populate('professor', 'firstName lastName email')
+      .populate('chapterId', 'title displayTitle order');
 
-    res.json(updated);
+    if (typeof recordingStarted === 'boolean' && recordingStarted) {
+      await upsertSessionRecording(id, { status: 'processing' }, req.user._id);
+    }
+
+    const withRecording = await attachRecordingToClass(updated);
+    res.json(withRecording);
   } catch (error) {
     console.error('Erreur startSession:', error);
     res.status(500).json({ success: false, error: 'Erreur lors du démarrage de la session' });
@@ -508,7 +546,7 @@ const startSession = async (req, res) => {
 const endSession = async (req, res) => {
   try {
     const { id } = req.params;
-    const { recordingUrl } = req.body || {};
+    const { recordingUrl, notes, recordingStatus, durationSeconds } = req.body || {};
 
     const classItem = await Class.findById(id);
     if (!classItem) {
@@ -522,13 +560,42 @@ const endSession = async (req, res) => {
     }
     const update = {
       status: 'completed',
-      'liveConfig.sessionEndedAt': new Date()
+      'liveConfig.sessionEndedAt': new Date(),
     };
     if (recordingUrl) update['liveConfig.recordingUrl'] = recordingUrl;
+
+    if (notes !== undefined) {
+      if (typeof notes === 'string') {
+        update.notes = { fr: notes, en: notes, ar: notes };
+      } else if (notes && typeof notes === 'object') {
+        update.notes = notes;
+      }
+    }
+
     const updated = await Class.findByIdAndUpdate(id, update, { new: true })
       .populate('course', 'title')
-      .populate('professor', 'firstName lastName email');
-    res.json(updated);
+      .populate('professor', 'firstName lastName email')
+      .populate('chapterId', 'title displayTitle order');
+
+    const hadRecording =
+      classItem.liveConfig?.recordingStarted ||
+      recordingUrl ||
+      (await Recording.findOne({ session: id }));
+
+    if (hadRecording || recordingUrl) {
+      await upsertSessionRecording(
+        id,
+        {
+          externalUrl: recordingUrl || undefined,
+          status: recordingUrl ? recordingStatus || 'ready' : recordingStatus || 'processing',
+          durationSeconds,
+        },
+        req.user._id
+      );
+    }
+
+    const withRecording = await attachRecordingToClass(updated);
+    res.json(withRecording);
   } catch (error) {
     console.error('Erreur endSession:', error);
     res.status(500).json({ success: false, error: 'Erreur lors de la fin de la session' });

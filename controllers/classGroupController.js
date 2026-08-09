@@ -40,6 +40,12 @@ function formatLeanGroup(g) {
     _id: g._id,
     name: g.name,
     description: g.description,
+    level: g.level || undefined,
+    subLevel: g.subLevel || undefined,
+    capacity: g.capacity,
+    schedule: g.schedule || undefined,
+    startDate: g.startDate || undefined,
+    endDate: g.endDate || undefined,
     courseId: g.courseId ? g.courseId._id.toString() : undefined,
     course,
     professorId: prof._id ? prof._id.toString() : prof.toString(),
@@ -121,7 +127,20 @@ const list = async (req, res) => {
 // POST /api/class-groups
 const create = async (req, res) => {
   try {
-    const { name, description, courseId, professorId, studentIds = [], status = 'active' } = req.body;
+    const {
+      name,
+      description,
+      courseId,
+      professorId,
+      studentIds = [],
+      status = 'active',
+      level,
+      subLevel,
+      capacity,
+      schedule,
+      startDate,
+      endDate,
+    } = req.body;
 
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'ValidationError', message: 'name is required' });
@@ -163,7 +182,13 @@ const create = async (req, res) => {
       courseId: courseId || null,
       professorId: pid,
       studentIds: Array.isArray(studentIds) ? studentIds : [],
-      status: status === 'archived' ? 'archived' : 'active'
+      status: status === 'archived' ? 'archived' : 'active',
+      level: level || null,
+      subLevel: subLevel || null,
+      capacity: capacity ? Number(capacity) : undefined,
+      schedule: schedule || undefined,
+      startDate: startDate ? new Date(startDate) : null,
+      endDate: endDate ? new Date(endDate) : null,
     });
 
     const out = await populateGroupDoc(group);
@@ -207,11 +232,17 @@ const update = async (req, res) => {
       return res.status(403).json({ error: 'Forbidden', message: 'You can only update your own cohorts' });
     }
 
-    const { name, description, courseId, professorId, studentIds, status } = req.body;
+    const { name, description, courseId, professorId, studentIds, status, level, subLevel, capacity, schedule, startDate, endDate } = req.body;
 
     if (name !== undefined) group.name = String(name).trim();
     if (description !== undefined) group.description = description ? String(description).trim() : '';
     if (status !== undefined && ['active', 'archived'].includes(status)) group.status = status;
+    if (level !== undefined) group.level = level || null;
+    if (subLevel !== undefined) group.subLevel = subLevel || null;
+    if (capacity !== undefined) group.capacity = Number(capacity) || group.capacity;
+    if (schedule !== undefined) group.schedule = schedule;
+    if (startDate !== undefined) group.startDate = startDate ? new Date(startDate) : null;
+    if (endDate !== undefined) group.endDate = endDate ? new Date(endDate) : null;
 
     if (req.user.role === 'admin' && professorId) {
       const prof = await User.findById(professorId);

@@ -57,6 +57,10 @@ const limiter = rateLimit({
   max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS, 10) || 100,
   standardHeaders: true,
   legacyHeaders: true,
+  skip: (req) => {
+    const url = req.originalUrl || req.url || '';
+    return url.startsWith('/api/health');
+  },
   message: {
     error: 'Too many requests',
     message: 'Too many requests from this IP, please try again later.',
@@ -87,6 +91,17 @@ app.use('/api/payments', require('./routes/payments'));
 app.use('/api/placement-tests', require('./routes/placementTests'));
 app.use('/api/exams', require('./routes/exams'));
 app.use('/api/teacher-earnings', require('./routes/teacherEarnings'));
+app.use('/api/languages', require('./routes/languages'));
+app.use('/api/levels', require('./routes/levels'));
+app.use('/api/enrollments', require('./routes/enrollments'));
+app.use('/api/books', require('./routes/books'));
+app.use('/api/chapters', require('./routes/chapters'));
+app.use('/api/materials', require('./routes/materials'));
+app.use('/api/recordings', require('./routes/recordings'));
+app.use('/api/exercises', require('./routes/exercises'));
+app.use('/api/games', require('./routes/games'));
+app.use('/api/gamification', require('./routes/gamification'));
+app.use('/api/progress', require('./routes/progress'));
 
 app.use('*', (req, res) => {
   res.status(404).json({

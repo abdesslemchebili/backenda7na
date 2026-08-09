@@ -2,6 +2,7 @@ const Course = require('../models/Course');
 const User = require('../models/User');
 const Class = require('../models/Class');
 const ClassGroup = require('../models/ClassGroup');
+const Enrollment = require('../models/Enrollment');
 
 // @desc    Récupérer tous les cours (avec filtres)
 // @route   GET /api/courses
@@ -335,6 +336,18 @@ const enrollStudent = async (req, res) => {
     }
 
     // Vérifier si l'étudiant est déjà inscrit
+    const existingEnrollment = await Enrollment.findOne({
+      student: req.user._id,
+      course: id,
+      status: 'active',
+    });
+    if (existingEnrollment) {
+      return res.status(400).json({
+        success: false,
+        error: 'Vous êtes déjà inscrit à ce cours',
+      });
+    }
+
     const alreadyEnrolled = course.enrolledStudents.some(
       enrollment => enrollment.student.toString() === req.user._id.toString()
     );
@@ -355,6 +368,12 @@ const enrollStudent = async (req, res) => {
 
     // Utiliser la méthode du modèle pour inscrire l'étudiant
     await course.enrollStudent(req.user._id);
+
+    await Enrollment.create({
+      student: req.user._id,
+      course: id,
+      status: 'active',
+    });
 
     // Ajouter le cours à l'étudiant
     await User.findByIdAndUpdate(
@@ -408,6 +427,10 @@ const unenrollStudent = async (req, res) => {
     }
 
     await course.unenrollStudent(targetStudentId);
+    await Enrollment.updateMany(
+      { student: targetStudentId, course: id, status: 'active' },
+      { status: 'withdrawn' }
+    );
     await User.findByIdAndUpdate(
       targetStudentId,
       { $pull: { 'studentInfo.enrolledCourses': id } }
