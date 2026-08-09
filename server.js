@@ -1,6 +1,20 @@
+const http = require('http');
 require('dotenv').config();
 const mongoose = require('mongoose');
+const { Server } = require('socket.io');
 const app = require('./app');
+const { attachClassroomSocket } = require('./socket/classroomSocket');
+
+const DEV_ORIGINS = [
+  'http://localhost:8080',
+  'http://localhost:8081',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:8080',
+  'http://127.0.0.1:8081',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000',
+];
 
 const connectDB = async () => {
   const uri =
@@ -31,11 +45,39 @@ const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
   await connectDB();
-  app.listen(PORT, () => {
+
+  const server = http.createServer(app);
+  const allowedOrigins = process.env.FRONTEND_URL
+    ? [process.env.FRONTEND_URL, ...DEV_ORIGINS]
+    : DEV_ORIGINS;
+
+  const io = new Server(server, {
+    cors: {
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        const isLocalDev =
+          process.env.NODE_ENV !== 'production' &&
+          /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+        if (allowedOrigins.includes(origin) || isLocalDev) {
+          return callback(null, true);
+        }
+        callback(new Error(`CORS blocked for origin: ${origin}`));
+      },
+      credentials: true,
+    },
+    path: '/socket.io',
+  });
+
+  attachClassroomSocket(io);
+
+  server.listen(PORT, () => {
     console.log(`🚀 Serveur démarré sur le port ${PORT}`);
     console.log('📚 Plateforme Nour Academy');
     console.log(`🌍 Mode: ${process.env.NODE_ENV || 'development'}`);
+    console.log('🔌 Socket.io classroom actif');
   });
+
+  return { server, io };
 };
 
 if (require.main === module) {
