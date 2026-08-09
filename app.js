@@ -2,9 +2,14 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const { createApiLimiter } = require('./utils/rateLimit');
 
 const app = express();
+
+// Required on Render/Heroku so req.ip is the client, not the load balancer
+if (process.env.NODE_ENV === 'production' || process.env.TRUST_PROXY === 'true') {
+  app.set('trust proxy', 1);
+}
 
 app.use(helmet());
 
@@ -52,20 +57,7 @@ app.get('/api/health', (req, res) => {
   res.status(dbReady ? 200 : 503).json(payload);
 });
 
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS, 10) || 100,
-  standardHeaders: true,
-  legacyHeaders: true,
-  skip: (req) => {
-    const url = req.originalUrl || req.url || '';
-    return url.startsWith('/api/health');
-  },
-  message: {
-    error: 'Too many requests',
-    message: 'Too many requests from this IP, please try again later.',
-  },
-});
+const limiter = createApiLimiter();
 app.use(limiter);
 
 app.use(express.json({ limit: '10mb' }));

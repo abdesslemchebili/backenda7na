@@ -1,27 +1,21 @@
 const express = require('express');
-const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const authController = require('../controllers/authController');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { createAuthLimiter } = require('../utils/rateLimit');
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: parseInt(process.env.AUTH_RATE_LIMIT_MAX, 10) || 30,
-  standardHeaders: true,
-  legacyHeaders: true,
-  message: {
-    error: 'Too many requests',
-    message: 'Too many authentication attempts. Please try again later.'
-  }
-});
+const loginLimiter = createAuthLimiter();
+const refreshLimiter = createAuthLimiter(
+  parseInt(process.env.AUTH_REFRESH_RATE_LIMIT_MAX, 10) || 300
+);
 
-// Routes publiques
-router.post('/login', authLimiter, authController.login);
-router.post('/register', authLimiter, authController.register);
-router.post('/refresh', authLimiter, authController.refreshTokenHandler);
-router.post('/request-password-reset', authLimiter, authController.requestPasswordReset);
-router.post('/reset-password', authLimiter, authController.resetPassword);
-router.post('/resend-verification', authLimiter, authController.resendVerificationEmail);
+// Routes publiques — refresh a une limite plus haute (appels fréquents légitimes)
+router.post('/login', loginLimiter, authController.login);
+router.post('/register', loginLimiter, authController.register);
+router.post('/refresh', refreshLimiter, authController.refreshTokenHandler);
+router.post('/request-password-reset', loginLimiter, authController.requestPasswordReset);
+router.post('/reset-password', loginLimiter, authController.resetPassword);
+router.post('/resend-verification', loginLimiter, authController.resendVerificationEmail);
 router.get('/verify', authController.verifyEmail);
 router.get('/verify/:token', authController.verifyEmail);
 
