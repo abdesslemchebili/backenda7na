@@ -27,6 +27,7 @@ const {
 const {
   getStudentVisibleClassFilter,
   enrollClassGroupStudentsInSession,
+  syncStudentCohortSessions,
 } = require('../utils/studentClassVisibility');
 const { notifyUser } = require('../utils/notifyUser');
 
@@ -794,6 +795,7 @@ const getUpcomingClasses = async (req, res) => {
 
     let query = timeFilter;
     if (req.user?.role === 'student') {
+      await syncStudentCohortSessions(req.user._id);
       const visibility = await getStudentVisibleClassFilter(req.user._id);
       query = { $and: [timeFilter, visibility] };
     }

@@ -1,6 +1,7 @@
 const ClassGroup = require('../models/ClassGroup');
 const Course = require('../models/Course');
 const User = require('../models/User');
+const { syncClassGroupStudents } = require('../utils/studentClassVisibility');
 
 const userPublicFields = 'firstName lastName email role status phone avatar bio preferences createdAt updatedAt';
 
@@ -191,6 +192,10 @@ const create = async (req, res) => {
       endDate: endDate ? new Date(endDate) : null,
     });
 
+    await syncClassGroupStudents(group).catch((err) => {
+      console.error('syncClassGroupStudents create:', err.message);
+    });
+
     const out = await populateGroupDoc(group);
     res.status(201).json(out);
   } catch (err) {
@@ -273,6 +278,9 @@ const update = async (req, res) => {
     }
 
     await group.save();
+    await syncClassGroupStudents(group).catch((err) => {
+      console.error('syncClassGroupStudents update:', err.message);
+    });
     const out = await populateGroupDoc(group);
     res.json(out);
   } catch (err) {

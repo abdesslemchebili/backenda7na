@@ -11,34 +11,40 @@ const { enrollStudentInCourseFromClassGroup } = require('./courseEnrollment');
 async function getStudentVisibilityContext(userId) {
   const userIdStr = userId.toString();
 
-  const [enrolledCourses, memberGroups, user] = await Promise.all([
+  const user = await User.findById(userId).select('studentInfo.classGroupId').lean();
+
+  const groupQuery = {
+    status: { $ne: 'archived' },
+    $or: [{ studentIds: userId }],
+  };
+  if (user?.studentInfo?.classGroupId) {
+    groupQuery.$or.push({ _id: user.studentInfo.classGroupId });
+  }
+
+  const [enrolledCourses, memberGroups] = await Promise.all([
     Course.find({ 'enrolledStudents.student': userId }).select('_id').lean(),
-    ClassGroup.find({ studentIds: userId, status: { $ne: 'archived' } }).select('_id courseId').lean(),
-    User.findById(userId).select('studentInfo.classGroupId').lean(),
+    ClassGroup.find(groupQuery).select('_id courseId professorId').lean(),
   ]);
 
-  const classGroupIds = new Set(memberGroups.map((g) => g._id.toString()));
-  if (user?.studentInfo?.classGroupId) {
-    classGroupIds.add(user.studentInfo.classGroupId.toString());
-  }
-
+  const classGroupIds = memberGroups.map((g) => g._id.toString());
   const courseIds = new Set(enrolledCourses.map((c) => c._id.toString()));
 
-  if (classGroupIds.size) {
-    const linkedGroups = await ClassGroup.find({
-      _id: { $in: Array.from(classGroupIds) },
-    })
-      .select('courseId')
-      .lean();
-    linkedGroups.forEach((g) => {
-      if (g.courseId) courseIds.add(g.courseId.toString());
-    });
-  }
+  memberGroups.forEach((g) => {
+    if (g.courseId) courseIds.add(g.courseId.toString());
+  });
+
+  const cohortCourseProfessorPairs = memberGroups
+    .filter((g) => g.courseId && g.professorId)
+    .map((g) => ({
+      course: g.courseId,
+      professor: g.professorId,
+    }));
 
   return {
     userId: userIdStr,
     courseIds: Array.from(courseIds),
-    classGroupIds: Array.from(classGroupIds),
+    classGroupIds,
+    cohortCourseProfessorPairs,
   };
 }
 
@@ -49,6 +55,9 @@ function buildStudentClassVisibilityFilter(ctx) {
   }
   if (ctx.classGroupIds.length) {
     or.push({ classGroupId: { $in: ctx.classGroupIds } });
+  }
+  for (const pair of ctx.cohortCourseProfessorPairs || []) {
+    or.push({ course: pair.course, professor: pair.professor });
   }
   return { $or: or };
 }
@@ -91,10 +100,77 @@ async function enrollClassGroupStudentsInSession(classGroup, classDoc) {
   }
 }
 
+/**
+ * Synchronise un étudiant avec sa cohorte : profil, cours, sessions existantes.
+ */
+async function syncStudentToClassGroup(userId, classGroup) {
+  if (!classGroup?._id) return;
+
+  await User.findByIdAndUpdate(userId, {
+    'studentInfo.classGroupId': classGroup._id,
+  });
+
+  try {
+    await enrollStudentInCourseFromClassGroup(userId, classGroup);
+  } catch (err) {
+    console.error('syncStudentToClassGroup enroll:', userId, err.message);
+  }
+
+  const sessionOr = [{ classGroupId: classGroup._id }];
+  if (classGroup.courseId && classGroup.professorId) {
+    sessionOr.push({
+      course: classGroup.courseId,
+      professor: classGroup.professorId,
+    });
+  }
+
+  const sessions = await Class.find({
+    type: 'live',
+    status: { $in: ['scheduled', 'ongoing'] },
+    $or: sessionOr,
+  });
+  const userIdStr = userId.toString();
+  for (const session of sessions) {
+    const exists = (session.enrolledStudents || []).some(
+      (e) => e.student && e.student.toString() === userIdStr
+    );
+    if (!exists) {
+      session.enrolledStudents.push({ student: userId, enrolledAt: new Date() });
+      await session.save();
+    }
+  }
+}
+
+async function syncClassGroupStudents(classGroup) {
+  if (!classGroup?.studentIds?.length) return;
+  for (const sid of classGroup.studentIds) {
+    await syncStudentToClassGroup(sid, classGroup);
+  }
+}
+
+/** Appelé au chargement du dashboard étudiant pour rattraper les sessions manquantes. */
+async function syncStudentCohortSessions(userId) {
+  const user = await User.findById(userId).select('studentInfo.classGroupId').lean();
+  const query = {
+    status: { $ne: 'archived' },
+    $or: [{ studentIds: userId }],
+  };
+  if (user?.studentInfo?.classGroupId) {
+    query.$or.push({ _id: user.studentInfo.classGroupId });
+  }
+  const groups = await ClassGroup.find(query);
+  for (const group of groups) {
+    await syncStudentToClassGroup(userId, group);
+  }
+}
+
 module.exports = {
   getStudentVisibilityContext,
   buildStudentClassVisibilityFilter,
   getStudentVisibleClassFilter,
   studentCanAccessClass,
   enrollClassGroupStudentsInSession,
+  syncStudentToClassGroup,
+  syncClassGroupStudents,
+  syncStudentCohortSessions,
 };

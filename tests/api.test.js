@@ -488,6 +488,85 @@ describe('API — Sprint 6 critical paths', () => {
       expect(upcomingRes.body.data.some((s) => s._id === classRes.body._id)).toBe(true);
     });
 
+    it('student added to cohort after session still sees it on dashboard sync', async () => {
+      const professor = await createUser({
+        email: 'prof-late-enroll@example.com',
+        password: 'propass',
+        role: 'professor',
+        status: 'verified',
+      });
+      const student = await createUser({
+        email: 'student-late-enroll@example.com',
+        password: 'studentpass',
+        role: 'student',
+        status: 'reglo',
+      });
+      const profHeaders = await authHeader('prof-late-enroll@example.com', 'propass');
+      const studentHeaders = await authHeader('student-late-enroll@example.com', 'studentpass');
+
+      const courseRes = await request(app)
+        .post('/api/courses')
+        .set(profHeaders)
+        .send({
+          title: { en: 'German A2', fr: 'Allemand A2', ar: 'German A2' },
+          description: { en: 'Test', fr: 'Test', ar: 'Test' },
+          language: 'german',
+          level: 'intermediate',
+          status: 'published',
+          maxStudents: 20,
+          price: 0,
+          duration: 8,
+          category: 'general',
+        });
+      const courseId = courseRes.body._id;
+      const professorId = professor._id.toString();
+
+      const groupRes = await request(app)
+        .post('/api/class-groups')
+        .set(profHeaders)
+        .send({
+          name: 'Cohorte A2',
+          courseId,
+          professorId,
+          studentIds: [],
+          capacity: 15,
+        });
+      const classGroupId = groupRes.body._id;
+
+      const start = new Date(Date.now() + 6 * 60 * 60 * 1000);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+      const classRes = await request(app)
+        .post('/api/classes')
+        .set(profHeaders)
+        .send({
+          title: { en: 'Late enroll session', fr: 'Session tardive', ar: 'Session tardive' },
+          description: { en: '', fr: '', ar: '' },
+          course: courseId,
+          classGroupId,
+          type: 'live',
+          status: 'scheduled',
+          schedule: {
+            startTime: start.toISOString(),
+            endTime: end.toISOString(),
+            timezone: 'Europe/Paris',
+            recurrence: 'none',
+          },
+          maxStudents: 15,
+        });
+      expect(classRes.status).toBe(201);
+
+      await request(app)
+        .put(`/api/class-groups/${classGroupId}`)
+        .set(profHeaders)
+        .send({ studentIds: [student._id.toString()] });
+
+      const dashRes = await request(app)
+        .get('/api/dashboard/student')
+        .set(studentHeaders);
+      expect(dashRes.status).toBe(200);
+      expect(dashRes.body.upcomingClasses.some((s) => s._id === classRes.body._id)).toBe(true);
+    });
+
     it('GET /schedule-conflicts is not captured by /:id route', async () => {
       await createUser({
         email: 'admin-conflict@example.com',

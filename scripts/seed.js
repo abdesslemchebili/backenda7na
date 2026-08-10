@@ -358,6 +358,9 @@ const createClassGroups = async (users, courses) => {
       status: 'active'
     });
     console.log(`✅ Class group créé: ${g.name}`);
+    if (marie) {
+      await User.findByIdAndUpdate(marie._id, { 'studentInfo.classGroupId': g._id });
+    }
     return [g];
   } catch (error) {
     console.error('❌ Erreur lors de la création des class groups:', error);

@@ -4,7 +4,7 @@ const ClassGroup = require('../models/ClassGroup');
 const Document = require('../models/Document');
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
-const { getStudentVisibleClassFilter } = require('../utils/studentClassVisibility');
+const { getStudentVisibleClassFilter, syncStudentCohortSessions } = require('../utils/studentClassVisibility');
 
 // GET /api/dashboard/student
 const getStudentDashboard = async (req, res) => {
@@ -21,6 +21,9 @@ const getStudentDashboard = async (req, res) => {
       return { course: { _id: c._id, title: c.title }, progress };
     });
     const averageProgress = enrolledCount ? Math.round(totalProgress / enrolledCount) : 0;
+
+    // Rattrape les inscriptions session/cours pour les cohortes déjà assignées
+    await syncStudentCohortSessions(userId);
 
     const visibility = await getStudentVisibleClassFilter(userId);
     const now = new Date();
