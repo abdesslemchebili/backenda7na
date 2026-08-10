@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const { createApiLimiter } = require('./utils/rateLimit');
+const { getAllowedOrigins, isOriginAllowed } = require('./utils/corsOrigins');
 
 // Enregistrer les schémas avant toute requête (populate cross-models)
 require('./models/registerSchemas');
@@ -22,26 +23,8 @@ if (process.env.NODE_ENV === 'production' || process.env.TRUST_PROXY === 'true')
 
 app.use(helmet());
 
-const DEV_ORIGINS = [
-  'http://localhost:8080',
-  'http://localhost:8081',
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'http://127.0.0.1:8080',
-  'http://127.0.0.1:8081',
-  'http://127.0.0.1:5173',
-  'http://127.0.0.1:3000',
-];
-
 const corsOrigin = (origin, callback) => {
-  if (!origin) return callback(null, true);
-  const allowed = process.env.FRONTEND_URL
-    ? [process.env.FRONTEND_URL, ...DEV_ORIGINS]
-    : DEV_ORIGINS;
-  const isLocalDev =
-    process.env.NODE_ENV !== 'production' &&
-    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-  if (allowed.includes(origin) || isLocalDev) {
+  if (isOriginAllowed(origin)) {
     return callback(null, true);
   }
   callback(new Error(`CORS blocked for origin: ${origin}`));
