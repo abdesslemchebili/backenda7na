@@ -1,5 +1,6 @@
 const http = require('http');
 require('dotenv').config();
+require('./models/registerSchemas');
 const mongoose = require('mongoose');
 const { Server } = require('socket.io');
 const app = require('./app');

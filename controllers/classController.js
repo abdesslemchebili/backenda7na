@@ -108,7 +108,13 @@ const getAllClasses = async (req, res) => {
       .populate('enrolledStudents.student', 'firstName lastName email');
 
     const total = await Class.countDocuments(filters);
-    const withRecordings = await attachRecordingsToClasses(classes);
+    let withRecordings;
+    try {
+      withRecordings = await attachRecordingsToClasses(classes);
+    } catch (recErr) {
+      console.error('attachRecordingsToClasses:', recErr);
+      withRecordings = classes.map((c) => (c.toObject ? c.toObject() : { ...c }));
+    }
 
     res.json({
       data: withRecordings,
@@ -121,9 +127,14 @@ const getAllClasses = async (req, res) => {
     });
   } catch (error) {
     console.error('Erreur getAllClasses:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Erreur lors de la récupération des classes' 
+    const formatted = formatControllerError(error);
+    if (formatted) {
+      return res.status(formatted.status).json({ success: false, error: formatted.message });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la récupération des classes',
+      ...(process.env.NODE_ENV !== 'production' && { details: error.message }),
     });
   }
 };

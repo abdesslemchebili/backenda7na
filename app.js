@@ -4,6 +4,15 @@ const cors = require('cors');
 const helmet = require('helmet');
 const { createApiLimiter } = require('./utils/rateLimit');
 
+// Enregistrer les schémas avant toute requête (populate cross-models)
+require('./models/registerSchemas');
+
+const {
+  authenticateToken,
+  authorizeRoles,
+} = require('./middleware/auth');
+const { getScheduleConflicts } = require('./controllers/classController');
+
 const app = express();
 
 // Required on Render/Heroku so req.ip is the client, not the load balancer
@@ -62,6 +71,14 @@ app.use(limiter);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Route statique enregistrée sur l'app (prioritaire sur /api/classes/:id)
+app.get(
+  '/api/classes/schedule-conflicts',
+  authenticateToken,
+  authorizeRoles('professor', 'admin'),
+  getScheduleConflicts
+);
 
 app.use('/api/files', require('./routes/files'));
 app.use('/api/auth', require('./routes/auth'));

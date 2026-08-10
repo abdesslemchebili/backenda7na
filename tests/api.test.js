@@ -318,6 +318,26 @@ describe('API — Sprint 6 critical paths', () => {
       expect(endRes.body.recording?.playbackUrl).toBe('https://example.com/recording.mp4');
     });
 
+    it('lists live classes for admin (planning page query)', async () => {
+      await createUser({
+        email: 'admin-list@example.com',
+        password: 'adminpass',
+        role: 'admin',
+        adminLevel: 'super',
+        status: 'verified',
+      });
+      const adminHeaders = await authHeader('admin-list@example.com', 'adminpass');
+
+      const res = await request(app)
+        .get('/api/classes')
+        .query({ limit: 200, type: 'live', sortOrder: 'asc' })
+        .set(adminHeaders);
+
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.pagination).toBeDefined();
+    });
+
     it('creates live session via class group (professor schedule flow)', async () => {
       const professor = await createUser({
         email: 'prof-sched@example.com',

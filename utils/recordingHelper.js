@@ -81,7 +81,11 @@ async function attachRecordingsToClasses(classes) {
   if (!classes?.length) return [];
   const ids = classes.map((c) => (c._id || c).toString());
   const recordings = await Recording.find({ session: { $in: ids } }).lean();
-  const bySession = new Map(recordings.map((r) => [r.session.toString(), r]));
+  const bySession = new Map();
+  for (const r of recordings) {
+    if (!r?.session) continue;
+    bySession.set(r.session.toString(), r);
+  }
   return classes.map((c) => {
     const o = c.toObject ? c.toObject() : { ...c };
     const rec = bySession.get(o._id.toString());
