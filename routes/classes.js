@@ -23,11 +23,11 @@ const {
 } = require('../controllers/classController');
 const attendanceController = require('../controllers/attendanceController');
 
-// Routes avec authentification
+// Routes avec authentification — routes statiques AVANT /:id (sinon "schedule-conflicts" est pris pour un id)
 router.get('/', authenticateToken, requireRegloForStudents, getAllClasses);
 router.get('/live', authenticateToken, requireRegloForStudents, getLiveClasses);
-router.get('/schedule-conflicts', authenticateToken, authorizeRoles('professor', 'admin'), getScheduleConflicts);
 router.get('/upcoming', authenticateToken, requireRegloForStudents, getUpcomingClasses);
+router.get('/schedule-conflicts', authenticateToken, authorizeRoles('professor', 'admin'), getScheduleConflicts);
 router.get('/:id/join-token', authenticateToken, requireRegloForStudents, getJoinToken);
 router.get('/:id', authenticateToken, requireRegloForStudents, getClassById);
 

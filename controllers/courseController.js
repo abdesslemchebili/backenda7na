@@ -171,8 +171,14 @@ const createCourse = async (req, res) => {
   try {
     const courseData = req.body;
     
-    // Assigner le professeur si non spécifié
+    // Assigner le professeur si non spécifié (professeur connecté uniquement)
     if (!courseData.professor) {
+      if (req.user.role === 'admin') {
+        return res.status(400).json({
+          success: false,
+          error: 'professor is required when creating a course as admin',
+        });
+      }
       courseData.professor = req.user._id;
     }
 

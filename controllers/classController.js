@@ -3,6 +3,7 @@ const Course = require('../models/Course');
 const User = require('../models/User');
 const ClassGroup = require('../models/ClassGroup');
 const Recording = require('../models/Recording');
+const mongoose = require('mongoose');
 const {
   generateLiveMeetingCredentials,
   canHostStartSession,
@@ -133,6 +134,13 @@ const getAllClasses = async (req, res) => {
 const getClassById = async (req, res) => {
   try {
     const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Identifiant de session invalide',
+      });
+    }
+
     const classItem = await Class.findById(id)
       .populate('course', 'title description')
       .populate('professor', 'firstName lastName email bio')
@@ -149,7 +157,7 @@ const getClassById = async (req, res) => {
     // Vérifier les permissions
     if (req.user.role === 'student') {
       const course = await Course.findById(classItem.course);
-      const isEnrolled = course.enrolledStudents.some(
+      const isEnrolled = (course?.enrolledStudents ?? []).some(
         enrollment => enrollment.student.toString() === req.user._id.toString()
       );
       if (!isEnrolled) {
@@ -159,9 +167,11 @@ const getClassById = async (req, res) => {
         });
       }
     } else if (req.user.role === 'professor') {
-      if (classItem.professor.toString() !== req.user._id.toString()) {
+      const profId = classItem.professor?.toString?.();
+      if (profId !== req.user._id.toString()) {
         const course = await Course.findById(classItem.course);
-        if (course.professor.toString() !== req.user._id.toString()) {
+        const courseProfId = course?.professor?.toString?.();
+        if (!courseProfId || courseProfId !== req.user._id.toString()) {
           return res.status(403).json({ 
             success: false, 
             error: 'Accès non autorisé à cette classe' 
@@ -512,7 +522,10 @@ const getScheduleConflicts = async (req, res) => {
     res.json({ hasConflict: conflicts.length > 0, conflicts });
   } catch (error) {
     console.error('Erreur getScheduleConflicts:', error);
-    res.status(500).json({ error: 'Internal Server Error', message: 'Failed to check conflicts' });
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la vérification des conflits horaires',
+    });
   }
 };
 

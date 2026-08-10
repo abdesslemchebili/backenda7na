@@ -318,71 +318,6 @@ describe('API — Sprint 6 critical paths', () => {
       expect(endRes.body.recording?.playbackUrl).toBe('https://example.com/recording.mp4');
     });
 
-    it('returns LiveKit join token for professor host', async () => {
-      const professor = await createUser({
-        email: 'prof-livekit@example.com',
-        password: 'propass',
-        role: 'professor',
-        status: 'verified',
-      });
-      const profHeaders = await authHeader('prof-livekit@example.com', 'propass');
-
-      const courseRes = await request(app)
-        .post('/api/courses')
-        .set(profHeaders)
-        .send({
-          title: { en: 'German A1', fr: 'Allemand A1', ar: 'German A1' },
-          description: { en: 'Test', fr: 'Test', ar: 'Test' },
-          language: 'german',
-          level: 'beginner',
-          status: 'published',
-          maxStudents: 20,
-          price: 0,
-          duration: 8,
-          category: 'general',
-        });
-      expect(courseRes.status).toBe(201);
-      const courseId = courseRes.body._id;
-
-      const start = new Date(Date.now() + 5 * 60 * 1000);
-      const end = new Date(start.getTime() + 60 * 60 * 1000);
-      const classRes = await request(app)
-        .post('/api/classes')
-        .set(profHeaders)
-        .send({
-          title: { en: 'Live LK', fr: 'Live LK', ar: 'Live LK' },
-          description: { en: '', fr: '', ar: '' },
-          course: courseId,
-          type: 'live',
-          status: 'scheduled',
-          schedule: {
-            startTime: start.toISOString(),
-            endTime: end.toISOString(),
-            timezone: 'UTC',
-            recurrence: 'none',
-          },
-          maxStudents: 20,
-        });
-      expect(classRes.status).toBe(201);
-      const classId = classRes.body._id;
-
-      await request(app)
-        .post(`/api/classes/${classId}/start`)
-        .set(profHeaders)
-        .send({});
-
-      const tokenRes = await request(app)
-        .get(`/api/classes/${classId}/join-token`)
-        .set(profHeaders);
-      expect(tokenRes.status).toBe(200);
-      expect(tokenRes.body.provider).toBe('livekit');
-      expect(tokenRes.body.serverUrl).toBe('wss://test-project.livekit.cloud');
-      expect(typeof tokenRes.body.token).toBe('string');
-      expect(tokenRes.body.token.length).toBeGreaterThan(20);
-      expect(tokenRes.body.roomName).toMatch(/^na-/);
-      expect(tokenRes.body.isHost).toBe(true);
-    });
-
     it('creates live session via class group (professor schedule flow)', async () => {
       const professor = await createUser({
         email: 'prof-sched@example.com',
@@ -446,6 +381,105 @@ describe('API — Sprint 6 critical paths', () => {
       expect(classRes.body.liveConfig?.platform).toBe('livekit');
       expect(classRes.body.liveConfig?.meetingId).toMatch(/^na-/);
       expect(classRes.body.classGroupId).toBe(classGroupId);
+    });
+
+    it('GET /schedule-conflicts is not captured by /:id route', async () => {
+      await createUser({
+        email: 'admin-conflict@example.com',
+        password: 'adminpass',
+        role: 'admin',
+        adminLevel: 'super',
+        status: 'verified',
+      });
+      const adminHeaders = await authHeader('admin-conflict@example.com', 'adminpass');
+
+      const professor = await createUser({
+        email: 'prof-conflict@example.com',
+        password: 'propass',
+        role: 'professor',
+        status: 'verified',
+      });
+      const professorId = professor._id.toString();
+
+      const start = new Date(Date.now() + 3 * 60 * 60 * 1000);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+
+      const res = await request(app)
+        .get('/api/classes/schedule-conflicts')
+        .query({
+          professorId,
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
+        })
+        .set(adminHeaders);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('hasConflict', false);
+      expect(Array.isArray(res.body.conflicts)).toBe(true);
+    });
+
+    it('returns LiveKit join token for professor host', async () => {
+      const professor = await createUser({
+        email: 'prof-livekit@example.com',
+        password: 'propass',
+        role: 'professor',
+        status: 'verified',
+      });
+      const profHeaders = await authHeader('prof-livekit@example.com', 'propass');
+
+      const courseRes = await request(app)
+        .post('/api/courses')
+        .set(profHeaders)
+        .send({
+          title: { en: 'German A1', fr: 'Allemand A1', ar: 'German A1' },
+          description: { en: 'Test', fr: 'Test', ar: 'Test' },
+          language: 'german',
+          level: 'beginner',
+          status: 'published',
+          maxStudents: 20,
+          price: 0,
+          duration: 8,
+          category: 'general',
+        });
+      expect(courseRes.status).toBe(201);
+      const courseId = courseRes.body._id;
+
+      const start = new Date(Date.now() + 5 * 60 * 1000);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+      const classRes = await request(app)
+        .post('/api/classes')
+        .set(profHeaders)
+        .send({
+          title: { en: 'Live LK', fr: 'Live LK', ar: 'Live LK' },
+          description: { en: '', fr: '', ar: '' },
+          course: courseId,
+          type: 'live',
+          status: 'scheduled',
+          schedule: {
+            startTime: start.toISOString(),
+            endTime: end.toISOString(),
+            timezone: 'UTC',
+            recurrence: 'none',
+          },
+          maxStudents: 20,
+        });
+      expect(classRes.status).toBe(201);
+      const classId = classRes.body._id;
+
+      await request(app)
+        .post(`/api/classes/${classId}/start`)
+        .set(profHeaders)
+        .send({});
+
+      const tokenRes = await request(app)
+        .get(`/api/classes/${classId}/join-token`)
+        .set(profHeaders);
+      expect(tokenRes.status).toBe(200);
+      expect(tokenRes.body.provider).toBe('livekit');
+      expect(tokenRes.body.serverUrl).toBe('wss://test-project.livekit.cloud');
+      expect(typeof tokenRes.body.token).toBe('string');
+      expect(tokenRes.body.roomName).toMatch(/^na-/);
+      expect(tokenRes.body.isHost).toBe(true);
     });
   });
 
