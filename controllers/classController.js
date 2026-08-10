@@ -24,6 +24,17 @@ const {
   createLiveKitToken,
 } = require('../utils/livekit');
 
+function formatControllerError(error) {
+  if (error.name === 'ValidationError') {
+    const details = Object.values(error.errors || {}).map((e) => e.message);
+    return { status: 400, message: details.join(' ') || error.message };
+  }
+  if (error.name === 'CastError') {
+    return { status: 400, message: `Identifiant invalide: ${error.path}` };
+  }
+  return null;
+}
+
 // @desc    Récupérer toutes les classes (avec filtres)
 // @route   GET /api/classes
 // @access  Public (avec restrictions selon le rôle)
@@ -179,28 +190,48 @@ const createClass = async (req, res) => {
   try {
     const classData = { ...req.body };
 
-    // Assigner le professeur si non spécifié (cohorte prioritaire)
     if (classData.classGroupId) {
       const cg = await ClassGroup.findById(classData.classGroupId);
       if (!cg) {
-        return res.status(400).json({ error: 'BadRequest', message: 'Class group not found' });
+        return res.status(400).json({ error: 'BadRequest', message: 'Cohorte introuvable' });
       }
-      classData.professor = classData.professor || cg.professorId;
+      if (!cg.professorId) {
+        return res.status(400).json({ error: 'BadRequest', message: 'La cohorte n\'a pas de professeur assigné' });
+      }
       if (!classData.course && cg.courseId) {
         classData.course = cg.courseId;
       }
-      if (cg.professorId.toString() !== classData.professor.toString()) {
-        return res.status(400).json({ error: 'BadRequest', message: 'Professor does not match the cohort' });
+      if (!classData.course) {
+        return res.status(400).json({ error: 'BadRequest', message: 'Cours requis pour planifier une session' });
       }
-      if (cg.courseId && classData.course && cg.courseId.toString() !== classData.course.toString()) {
-        return res.status(400).json({ error: 'BadRequest', message: 'Course does not match the cohort' });
+      if (cg.courseId && classData.course.toString() !== cg.courseId.toString()) {
+        return res.status(400).json({ error: 'BadRequest', message: 'Le cours ne correspond pas à la cohorte' });
+      }
+      if (req.user.role === 'professor') {
+        if (cg.professorId.toString() !== req.user._id.toString()) {
+          return res.status(403).json({
+            success: false,
+            error: 'Cette cohorte ne vous appartient pas',
+          });
+        }
+        classData.professor = req.user._id;
+      } else {
+        classData.professor = cg.professorId;
       }
     } else if (!classData.professor) {
       classData.professor = req.user._id;
     }
 
+    if (!classData.professor) {
+      return res.status(400).json({ error: 'BadRequest', message: 'Professeur requis' });
+    }
+
     if (!classData.schedule?.startTime) {
       return res.status(400).json({ error: 'BadRequest', message: 'schedule.startTime is required' });
+    }
+
+    if (classData.type === 'live' && !classData.schedule?.endTime) {
+      return res.status(400).json({ error: 'BadRequest', message: 'schedule.endTime is required for live sessions' });
     }
 
     const conflicts = await findProfessorScheduleConflicts(
@@ -216,13 +247,13 @@ const createClass = async (req, res) => {
       });
     }
 
-    // Vérifier que l'utilisateur peut créer la classe
     if (req.user.role === 'professor') {
       const course = await Course.findById(classData.course);
-      if (!course || course.professor.toString() !== req.user._id.toString()) {
-        return res.status(403).json({ 
-          success: false, 
-          error: 'Vous ne pouvez créer des classes que pour vos propres cours' 
+      const ownerId = course?.professor?.toString?.();
+      if (!course || !ownerId || ownerId !== req.user._id.toString()) {
+        return res.status(403).json({
+          success: false,
+          error: 'Vous ne pouvez créer des classes que pour vos propres cours',
         });
       }
     }
@@ -231,17 +262,14 @@ const createClass = async (req, res) => {
       const creds = generateLiveMeetingCredentials();
       classData.liveConfig = {
         ...(classData.liveConfig || {}),
-        platform: 'custom',
+        platform: 'livekit',
         meetingId: creds.meetingId,
-        meetingPassword: creds.meetingPassword,
-        waitingRoom: true
+        waitingRoom: true,
       };
     }
 
     const classItem = new Class(classData);
     await classItem.save();
-
-    // Note: Course model doesn't have a classes field - classes are linked via course field
 
     const populatedClass = await Class.findById(classItem._id)
       .populate('course', 'title')
@@ -250,9 +278,16 @@ const createClass = async (req, res) => {
     res.status(201).json(populatedClass);
   } catch (error) {
     console.error('Erreur createClass:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Erreur lors de la création de la classe' 
+    const formatted = formatControllerError(error);
+    if (formatted) {
+      return res.status(formatted.status).json({
+        success: false,
+        error: formatted.message,
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la création de la classe',
     });
   }
 };
