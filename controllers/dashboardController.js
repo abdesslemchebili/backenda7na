@@ -1,8 +1,10 @@
 const Course = require('../models/Course');
 const Class = require('../models/Class');
+const ClassGroup = require('../models/ClassGroup');
 const Document = require('../models/Document');
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
+const { getStudentVisibleClassFilter } = require('../utils/studentClassVisibility');
 
 // GET /api/dashboard/student
 const getStudentDashboard = async (req, res) => {
@@ -20,16 +22,24 @@ const getStudentDashboard = async (req, res) => {
     });
     const averageProgress = enrolledCount ? Math.round(totalProgress / enrolledCount) : 0;
 
-    const classIds = (await Class.find({ 'enrolledStudents.student': userId }).select('_id')).map(x => x._id);
+    const visibility = await getStudentVisibleClassFilter(userId);
     const now = new Date();
     const upcomingClasses = await Class.find({
-      _id: { $in: classIds },
+      ...visibility,
       type: 'live',
       status: 'scheduled',
-      'schedule.startTime': { $gt: now }
-    }).populate('course', 'title').sort('schedule.startTime').limit(5).lean();
+      'schedule.startTime': { $gt: now },
+    })
+      .populate('course', 'title')
+      .populate('classGroupId', 'name')
+      .sort('schedule.startTime')
+      .limit(20)
+      .lean();
 
-    const courseIds = courses.map(c => c._id);
+    const courseIds = courses.map((c) => c._id);
+    const visibleClassIds = (
+      await Class.find(visibility).select('_id').lean()
+    ).map((x) => x._id);
     const recentDocuments = await Document.find({ course: { $in: courseIds } })
       .sort({ createdAt: -1 }).limit(5).select('title course createdAt').lean();
 
@@ -40,10 +50,10 @@ const getStudentDashboard = async (req, res) => {
     });
     const sessionsAttended = monthAttendance.filter(a => a.status === 'present').length;
     const sessionsTotal = await Class.countDocuments({
-      _id: { $in: classIds },
+      _id: { $in: visibleClassIds },
       type: 'live',
       status: { $in: ['completed', 'ongoing'] },
-      'schedule.startTime': { $gte: startOfMonth }
+      'schedule.startTime': { $gte: startOfMonth },
     });
     const monthPercentage = sessionsTotal ? Math.round((sessionsAttended / sessionsTotal) * 100) : 0;
 

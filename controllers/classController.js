@@ -24,6 +24,11 @@ const {
   getLiveKitConfig,
   createLiveKitToken,
 } = require('../utils/livekit');
+const {
+  getStudentVisibleClassFilter,
+  enrollClassGroupStudentsInSession,
+} = require('../utils/studentClassVisibility');
+const { notifyUser } = require('../utils/notifyUser');
 
 function formatControllerError(error) {
   if (error.name === 'ValidationError') {
@@ -72,12 +77,9 @@ const getAllClasses = async (req, res) => {
 
     // Restrictions selon le rôle
     if (req.user && req.user.role === 'student') {
-      // Les étudiants ne voient que les classes des cours auxquels ils sont inscrits
-      const enrolledCourses = await Course.find({
-        'enrolledStudents.student': req.user._id
-      }).select('_id');
-      
-      filters.course = { $in: enrolledCourses.map(c => c._id) };
+      const visibility = await getStudentVisibleClassFilter(req.user._id);
+      const base = { ...filters };
+      filters = Object.keys(base).length ? { $and: [base, visibility] } : visibility;
     } else if (req.user && req.user.role === 'professor') {
       // Les professeurs voient leurs propres classes et celles des cours publics
       const publicCourses = await Course.find({ status: 'published' }).select('_id');
@@ -167,14 +169,12 @@ const getClassById = async (req, res) => {
 
     // Vérifier les permissions
     if (req.user.role === 'student') {
-      const course = await Course.findById(classItem.course);
-      const isEnrolled = (course?.enrolledStudents ?? []).some(
-        enrollment => enrollment.student.toString() === req.user._id.toString()
-      );
-      if (!isEnrolled) {
-        return res.status(403).json({ 
-          success: false, 
-          error: 'Accès non autorisé à cette classe' 
+      const { studentCanAccessClass } = require('../utils/studentClassVisibility');
+      const canAccess = await studentCanAccessClass(req.user._id, classItem);
+      if (!canAccess) {
+        return res.status(403).json({
+          success: false,
+          error: 'Accès non autorisé à cette classe',
         });
       }
     } else if (req.user.role === 'professor') {
@@ -210,9 +210,11 @@ const getClassById = async (req, res) => {
 const createClass = async (req, res) => {
   try {
     const classData = { ...req.body };
+    let cohortForEnroll = null;
 
     if (classData.classGroupId) {
       const cg = await ClassGroup.findById(classData.classGroupId);
+      cohortForEnroll = cg;
       if (!cg) {
         return res.status(400).json({ error: 'BadRequest', message: 'Cohorte introuvable' });
       }
@@ -290,7 +292,37 @@ const createClass = async (req, res) => {
     }
 
     const classItem = new Class(classData);
+    if (cohortForEnroll) {
+      await enrollClassGroupStudentsInSession(cohortForEnroll, classItem);
+    }
     await classItem.save();
+
+    if (cohortForEnroll && (cohortForEnroll.studentIds || []).length) {
+      const sessionTitle =
+        classItem.title?.fr || classItem.title?.en || 'Session live';
+      const when = classItem.schedule?.startTime
+        ? new Date(classItem.schedule.startTime).toLocaleString('fr-FR', {
+            dateStyle: 'medium',
+            timeStyle: 'short',
+          })
+        : '';
+      for (const sid of cohortForEnroll.studentIds) {
+        notifyUser(sid, {
+          title: {
+            fr: 'Nouvelle session planifiée',
+            en: 'New session scheduled',
+            ar: 'جلسة جديدة',
+          },
+          body: {
+            fr: `${sessionTitle}${when ? ` — ${when}` : ''}`,
+            en: `${sessionTitle}${when ? ` — ${when}` : ''}`,
+            ar: `${sessionTitle}${when ? ` — ${when}` : ''}`,
+          },
+          type: 'class_scheduled',
+          data: { classId: classItem._id, classGroupId: cohortForEnroll._id },
+        }).catch((err) => console.error('notifyUser class_scheduled:', err.message));
+      }
+    }
 
     const populatedClass = await Class.findById(classItem._id)
       .populate('course', 'title')
@@ -754,11 +786,19 @@ const getUpcomingClasses = async (req, res) => {
     const now = new Date();
     const futureDate = new Date(now.getTime() + (parseInt(days) * 24 * 60 * 60 * 1000));
 
-    const classes = await Class.find({
+    const timeFilter = {
       type: 'live',
       status: 'scheduled',
-      'schedule.startTime': { $gte: now, $lte: futureDate }
-    })
+      'schedule.startTime': { $gte: now, $lte: futureDate },
+    };
+
+    let query = timeFilter;
+    if (req.user?.role === 'student') {
+      const visibility = await getStudentVisibleClassFilter(req.user._id);
+      query = { $and: [timeFilter, visibility] };
+    }
+
+    const classes = await Class.find(query)
     .limit(parseInt(limit))
     .populate('course', 'title')
     .populate('professor', 'firstName lastName email')

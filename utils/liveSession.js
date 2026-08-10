@@ -51,10 +51,36 @@ function canHostStartSession(classItem, now = Date.now()) {
 
 async function isStudentEnrolledInClassCourse(studentId, classItem) {
   const course = await Course.findById(classItem.course).select('enrolledStudents');
-  if (!course) return false;
-  return course.enrolledStudents.some(
+  if (course?.enrolledStudents.some(
     (e) => e.student && e.student.toString() === studentId.toString()
-  );
+  )) {
+    return true;
+  }
+
+  if ((classItem.enrolledStudents || []).some(
+    (e) => e.student && e.student.toString() === studentId.toString()
+  )) {
+    return true;
+  }
+
+  if (classItem.classGroupId) {
+    const ClassGroup = require('../models/ClassGroup');
+    const group = await ClassGroup.findById(classItem.classGroupId).select('studentIds');
+    if (group?.studentIds.some((id) => id.toString() === studentId.toString())) {
+      return true;
+    }
+  }
+
+  const User = require('../models/User');
+  const user = await User.findById(studentId).select('studentInfo.classGroupId');
+  if (
+    classItem.classGroupId &&
+    user?.studentInfo?.classGroupId?.toString() === classItem.classGroupId.toString()
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 async function canProfessorHostClass(user, classItem) {
