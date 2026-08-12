@@ -4,7 +4,7 @@ const ClassGroup = require('../models/ClassGroup');
 const Document = require('../models/Document');
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
-const { getStudentVisibleClassFilter, syncStudentCohortSessions } = require('../utils/studentClassVisibility');
+const { getStudentVisibleClassFilter, syncStudentCohortSessions, fetchStudentScheduleSessions } = require('../utils/studentClassVisibility');
 
 // GET /api/dashboard/student
 const getStudentDashboard = async (req, res) => {
@@ -25,21 +25,10 @@ const getStudentDashboard = async (req, res) => {
     // Rattrape les inscriptions session/cours pour les cohortes déjà assignées
     await syncStudentCohortSessions(userId);
 
-    const visibility = await getStudentVisibleClassFilter(userId);
+    const upcomingClasses = await fetchStudentScheduleSessions(userId, { limit: 20, days: 90 });
     const now = new Date();
-    const upcomingClasses = await Class.find({
-      ...visibility,
-      type: 'live',
-      status: 'scheduled',
-      'schedule.startTime': { $gt: now },
-    })
-      .populate('course', 'title')
-      .populate('classGroupId', 'name')
-      .sort('schedule.startTime')
-      .limit(20)
-      .lean();
-
     const courseIds = courses.map((c) => c._id);
+    const visibility = await getStudentVisibleClassFilter(userId);
     const visibleClassIds = (
       await Class.find(visibility).select('_id').lean()
     ).map((x) => x._id);
@@ -193,4 +182,17 @@ const getAdminDashboard = async (req, res) => {
   }
 };
 
-module.exports = { getStudentDashboard, getProfessorDashboard, getAdminDashboard };
+// GET /api/dashboard/student/schedule — planning étudiant (sessions non terminées)
+const getStudentSchedule = async (req, res) => {
+  try {
+    const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 180));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const data = await fetchStudentScheduleSessions(req.user._id, { days, limit });
+    res.json({ data, total: data.length });
+  } catch (err) {
+    console.error('getStudentSchedule:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+};
+
+module.exports = { getStudentDashboard, getProfessorDashboard, getAdminDashboard, getStudentSchedule };

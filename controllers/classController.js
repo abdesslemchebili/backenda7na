@@ -28,6 +28,8 @@ const {
   getStudentVisibleClassFilter,
   enrollClassGroupStudentsInSession,
   syncStudentCohortSessions,
+  buildStudentScheduleMongoFilter,
+  completeExpiredLiveSessions,
 } = require('../utils/studentClassVisibility');
 const { notifyUser } = require('../utils/notifyUser');
 
@@ -60,7 +62,7 @@ const getAllClasses = async (req, res) => {
     } = req.query;
 
     // Construire les filtres
-    const filters = {};
+    let filters = {};
     if (course) filters.course = course;
     if (type) filters.type = type;
     if (status) filters.status = status;
@@ -258,6 +260,17 @@ const createClass = async (req, res) => {
       return res.status(400).json({ error: 'BadRequest', message: 'schedule.endTime is required for live sessions' });
     }
 
+    const startAt = new Date(classData.schedule.startTime);
+    if (Number.isNaN(startAt.getTime())) {
+      return res.status(400).json({ error: 'BadRequest', message: 'schedule.startTime invalide' });
+    }
+    if (startAt.getTime() < Date.now() - 60_000) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'La date/heure de début doit être dans le futur pour que les étudiants la voient dans leur planning',
+      });
+    }
+
     const conflicts = await findProfessorScheduleConflicts(
       classData.professor,
       classData.schedule.startTime,
@@ -329,7 +342,17 @@ const createClass = async (req, res) => {
       .populate('course', 'title')
       .populate('professor', 'firstName lastName email');
 
-    res.status(201).json(populatedClass);
+    const cohortStudentCount = (cohortForEnroll?.studentIds || []).length;
+    const payload =
+      populatedClass?.toObject?.() ? populatedClass.toObject() : populatedClass;
+    res.status(201).json({
+      ...payload,
+      warning:
+        cohortForEnroll && cohortStudentCount === 0
+          ? 'Session créée, mais la cohorte n’a aucun étudiant : personne ne la verra dans le planning étudiant tant que des élèves ne sont pas ajoutés à la cohorte.'
+          : undefined,
+      enrolledFromCohort: cohortStudentCount,
+    });
   } catch (error) {
     console.error('Erreur createClass:', error);
     const formatted = formatControllerError(error);
@@ -784,26 +807,39 @@ const getLiveClasses = async (req, res) => {
 const getUpcomingClasses = async (req, res) => {
   try {
     const { limit = 10, days = 7 } = req.query;
+    const parsedDays = Math.min(365, Math.max(1, parseInt(days, 10) || 7));
+    const parsedLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
     const now = new Date();
-    const futureDate = new Date(now.getTime() + (parseInt(days) * 24 * 60 * 60 * 1000));
+    await completeExpiredLiveSessions(now);
 
-    const timeFilter = {
-      type: 'live',
-      status: 'scheduled',
-      'schedule.startTime': { $gte: now, $lte: futureDate },
-    };
-
-    let query = timeFilter;
+    let query;
     if (req.user?.role === 'student') {
       await syncStudentCohortSessions(req.user._id);
-      const visibility = await getStudentVisibleClassFilter(req.user._id);
-      query = { $and: [timeFilter, visibility] };
+      query = await buildStudentScheduleMongoFilter(req.user._id, {
+        days: parsedDays,
+        now,
+      });
+    } else {
+      const futureDate = new Date(now.getTime() + parsedDays * 24 * 60 * 60 * 1000);
+      query = {
+        type: 'live',
+        status: { $in: ['scheduled', 'ongoing'] },
+        'schedule.startTime': { $lte: futureDate },
+        $or: [
+          { 'schedule.endTime': { $gt: now } },
+          { status: 'ongoing' },
+        ],
+      };
+      if (req.user?.role === 'professor') {
+        query.professor = req.user._id;
+      }
     }
 
     const classes = await Class.find(query)
-    .limit(parseInt(limit))
+    .limit(parsedLimit)
     .populate('course', 'title')
     .populate('professor', 'firstName lastName email')
+    .populate('classGroupId', 'name')
     .sort({ 'schedule.startTime': 1 });
 
     res.json({

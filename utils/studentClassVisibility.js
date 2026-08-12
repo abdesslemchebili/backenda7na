@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Course = require('../models/Course');
 const ClassGroup = require('../models/ClassGroup');
 const Class = require('../models/Class');
@@ -5,28 +6,65 @@ const User = require('../models/User');
 const { enrollStudentInCourseFromClassGroup } = require('./courseEnrollment');
 
 /**
+ * Sessions live visibles au planning étudiant : pas encore terminées
+ * (inclut en cours + planifiées même si l'heure de début est passée).
+ */
+function buildActiveLiveSessionTimeFilter(now = new Date()) {
+  return {
+    $or: [
+      { 'schedule.endTime': { $gt: now } },
+      { status: 'ongoing' },
+      {
+        'schedule.endTime': { $exists: false },
+        'schedule.startTime': { $gt: now },
+      },
+    ],
+  };
+}
+
+async function buildStudentScheduleMongoFilter(userId, options = {}) {
+  const visibility = await getStudentVisibleClassFilter(userId);
+  const now = options.now || new Date();
+  const days = options.days ?? 180;
+  const horizon = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+
+  const and = [
+    visibility,
+    { type: 'live' },
+    { status: { $in: ['scheduled', 'ongoing'] } },
+    buildActiveLiveSessionTimeFilter(now),
+    { 'schedule.startTime': { $lte: horizon } },
+  ];
+
+  return { $and: and };
+}
+
+/**
  * Contexte de visibilité des sessions live pour un étudiant :
  * cours inscrits, cohortes (studentIds + studentInfo.classGroupId).
  */
 async function getStudentVisibilityContext(userId) {
-  const userIdStr = userId.toString();
+  const uid =
+    userId instanceof mongoose.Types.ObjectId
+      ? userId
+      : new mongoose.Types.ObjectId(String(userId));
 
-  const user = await User.findById(userId).select('studentInfo.classGroupId').lean();
+  const user = await User.findById(uid).select('studentInfo.classGroupId').lean();
 
   const groupQuery = {
     status: { $ne: 'archived' },
-    $or: [{ studentIds: userId }],
+    $or: [{ studentIds: uid }],
   };
   if (user?.studentInfo?.classGroupId) {
     groupQuery.$or.push({ _id: user.studentInfo.classGroupId });
   }
 
   const [enrolledCourses, memberGroups] = await Promise.all([
-    Course.find({ 'enrolledStudents.student': userId }).select('_id').lean(),
+    Course.find({ 'enrolledStudents.student': uid }).select('_id').lean(),
     ClassGroup.find(groupQuery).select('_id courseId professorId').lean(),
   ]);
 
-  const classGroupIds = memberGroups.map((g) => g._id.toString());
+  const classGroupIds = memberGroups.map((g) => g._id);
   const courseIds = new Set(enrolledCourses.map((c) => c._id.toString()));
 
   memberGroups.forEach((g) => {
@@ -41,8 +79,8 @@ async function getStudentVisibilityContext(userId) {
     }));
 
   return {
-    userId: userIdStr,
-    courseIds: Array.from(courseIds),
+    userId: uid,
+    courseIds: Array.from(courseIds).map((id) => new mongoose.Types.ObjectId(id)),
     classGroupIds,
     cohortCourseProfessorPairs,
   };
@@ -164,7 +202,37 @@ async function syncStudentCohortSessions(userId) {
   }
 }
 
+/**
+ * Passe en completed les lives dont l'heure de fin est dépassée
+ * (évite que le planning prof affiche encore des sessions déjà terminées).
+ */
+async function completeExpiredLiveSessions(now = new Date()) {
+  await Class.updateMany(
+    {
+      type: 'live',
+      status: { $in: ['scheduled', 'ongoing'] },
+      'schedule.endTime': { $lte: now },
+    },
+    { $set: { status: 'completed' } }
+  );
+}
+
+async function fetchStudentScheduleSessions(userId, options = {}) {
+  await completeExpiredLiveSessions(options.now || new Date());
+  await syncStudentCohortSessions(userId);
+  const filter = await buildStudentScheduleMongoFilter(userId, options);
+  return Class.find(filter)
+    .populate('course', 'title')
+    .populate('professor', 'firstName lastName email')
+    .populate('classGroupId', 'name')
+    .sort({ 'schedule.startTime': 1 })
+    .limit(options.limit ?? 100)
+    .lean();
+}
+
 module.exports = {
+  buildActiveLiveSessionTimeFilter,
+  buildStudentScheduleMongoFilter,
   getStudentVisibilityContext,
   buildStudentClassVisibilityFilter,
   getStudentVisibleClassFilter,
@@ -173,4 +241,6 @@ module.exports = {
   syncStudentToClassGroup,
   syncClassGroupStudents,
   syncStudentCohortSessions,
+  completeExpiredLiveSessions,
+  fetchStudentScheduleSessions,
 };
