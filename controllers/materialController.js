@@ -7,6 +7,12 @@ const Course = require('../models/Course');
 const { MATERIAL_TYPES } = require('../models/Material');
 const { buildSignedFileUrl, getSignedUrlExpiryIso } = require('../utils/fileAccess');
 const { pickLocalizedTitle } = require('./bookController');
+const {
+  isObjectStorageConfigured,
+  isLocalUploadPath,
+  buildObjectPresignedUrl,
+  uploadLocalFileToObjectStorage,
+} = require('../utils/objectStorage');
 
 function formatMaterial(doc) {
   if (!doc) return null;
@@ -110,12 +116,26 @@ const createMaterial = async (req, res) => {
     let size = 0;
 
     if (req.file) {
-      if (type === 'audio') {
+      size = req.file.size || 0;
+      if (isObjectStorageConfigured()) {
+        const folder = type === 'audio' ? 'audio' : 'documents';
+        const safeName = (req.file.originalname || req.file.filename || 'file').replace(
+          /[^a-zA-Z0-9._-]/g,
+          '_'
+        );
+        const key = `materials/${folder}/${bookId || courseId || 'misc'}/${Date.now()}-${safeName}`;
+        await uploadLocalFileToObjectStorage({
+          localPath: req.file.path,
+          key,
+          contentType: req.file.mimetype || 'application/octet-stream',
+        });
+        if (fs.existsSync(req.file.path)) fs.unlink(req.file.path, () => {});
+        fileUrl = key;
+      } else if (type === 'audio') {
         fileUrl = `/uploads/audio/${req.file.filename}`;
       } else {
         fileUrl = `/uploads/documents/${req.file.filename}`;
       }
-      size = req.file.size || 0;
     } else if (['pdf', 'audio', 'document', 'video'].includes(type) && !externalUrl) {
       return res.status(400).json({ error: 'ValidationError', message: 'file or externalUrl is required' });
     }
@@ -132,6 +152,12 @@ const createMaterial = async (req, res) => {
         ? JSON.parse(title)
         : titleObj;
 
+    let materialOrder = Number(order) || 0;
+    if (!materialOrder && chapterId) {
+      const count = await Material.countDocuments({ chapter: chapterId, type, active: true });
+      materialOrder = count + 1;
+    }
+
     const material = await Material.create({
       type,
       title: parsedTitle,
@@ -144,7 +170,7 @@ const createMaterial = async (req, res) => {
       chapter: chapterId || null,
       duration: duration != null ? Number(duration) : null,
       transcript: transcript || null,
-      order: Number(order) || 0,
+      order: materialOrder,
       size,
       uploadedBy: req.user._id,
     });
@@ -217,6 +243,22 @@ const downloadMaterial = async (req, res) => {
     }
     if (!material.fileUrl) {
       return res.status(404).json({ error: 'NotFound', message: 'File not available' });
+    }
+
+    if (!isLocalUploadPath(material.fileUrl) && isObjectStorageConfigured()) {
+      try {
+        const signed = await buildObjectPresignedUrl(material.fileUrl);
+        const ext = path.extname(material.fileUrl) || '';
+        return res.json({
+          url: signed.url,
+          expiresAt: signed.expiresAt || getSignedUrlExpiryIso(),
+          filename: `${pickLocalizedTitle(material.title).replace(/[^\w\s-]/g, '') || 'material'}${ext}`,
+          external: signed.external,
+        });
+      } catch (storageErr) {
+        console.error('downloadMaterial storage:', storageErr.message || storageErr);
+        return res.status(404).json({ error: 'NotFound', message: 'File missing in storage' });
+      }
     }
 
     const url = buildSignedFileUrl(material.fileUrl, req.user._id, req);
