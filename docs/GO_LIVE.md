@@ -23,7 +23,15 @@ Copier `.env.example` vers `.env` et renseigner :
 | `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX_REQUESTS` | Non | Limitation globale API |
 | `AUTH_RATE_LIMIT_MAX` | Non | Limitation routes `/api/auth/*` |
 | `APP_VERSION` | Non | Affiché dans `/api/health` |
+| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` / `LIVEKIT_URL` | Oui (live) | Salles LiveKit |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` / `S3_BUCKET` | Pour enregistrements auto | Bucket S3 ou Cloudflare R2 (Egress) |
+| `S3_ENDPOINT` | R2 / MinIO | Ex. `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
+| `S3_REGION` | Non | Défaut `auto` (R2) |
+| `S3_PUBLIC_BASE_URL` | Non | CDN public ; sinon URLs présignées |
 | `JITSI_DOMAIN` | Optionnel | Domaine Jitsi self-hosted (défaut : meet.jit.si côté frontend) |
+
+Webhook LiveKit à configurer dans le dashboard Cloud :  
+`{API_URL}/api/webhooks/livekit` (événements egress).
 
 **Ne jamais** committer `.env` ni exposer `JWT_SECRET` dans le frontend.
 

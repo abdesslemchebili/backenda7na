@@ -49,6 +49,13 @@ app.get('/api/health', (req, res) => {
   res.status(dbReady ? 200 : 503).json(payload);
 });
 
+// LiveKit webhooks need the raw body for signature verification (before JSON parser / rate limit)
+app.use(
+  '/api/webhooks/livekit',
+  express.raw({ type: ['application/webhook+json', 'application/json', '*/*'], limit: '2mb' }),
+  require('./routes/livekitWebhook')
+);
+
 const limiter = createApiLimiter();
 app.use(limiter);
 

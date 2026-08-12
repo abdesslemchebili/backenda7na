@@ -12,6 +12,7 @@ function formatRecording(doc) {
     _id: o._id,
     session: o.session?._id ? o.session._id.toString() : o.session?.toString?.() || o.session,
     externalUrl: o.externalUrl,
+    egressId: o.egressId || null,
     playbackUrl,
     requiresSignedAccess,
     durationSeconds: o.durationSeconds,
@@ -37,13 +38,14 @@ async function canAccessSessionRecording(req, classItem) {
 }
 
 async function upsertSessionRecording(sessionId, payload, userId) {
-  const { externalUrl, storageUrl, status, durationSeconds, failureReason } = payload;
+  const { externalUrl, storageUrl, egressId, status, durationSeconds, failureReason } = payload;
 
   let recording = await Recording.findOne({ session: sessionId });
   const data = {};
 
   if (externalUrl !== undefined) data.externalUrl = externalUrl || null;
   if (storageUrl !== undefined) data.storageUrl = storageUrl || null;
+  if (egressId !== undefined) data.egressId = egressId || null;
   if (durationSeconds !== undefined) data.durationSeconds = durationSeconds != null ? Number(durationSeconds) : null;
   if (failureReason !== undefined) data.failureReason = failureReason || null;
 

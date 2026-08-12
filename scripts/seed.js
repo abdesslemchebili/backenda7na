@@ -325,14 +325,22 @@ const createCourses = async (users) => {
 
     const marie = users.find((u) => u.email === 'marie.dubois@example.com');
     const createdCourses = [];
-    for (const courseData of courses) {
+    for (let i = 0; i < courses.length; i++) {
+      const courseData = courses[i];
       const course = new Course(courseData);
-      if (marie) {
-        course.enrolledStudents.push({ student: marie._id, progress: 30 });
+      // Marie is enrolled only in the English beginners course (demo)
+      if (marie && courseData.language === 'english') {
+        course.enrolledStudents.push({ student: marie._id, progress: 30, completed: false });
       }
       await course.save();
       createdCourses.push(course);
       console.log(`✅ Cours créé: ${course.title.en}`);
+    }
+
+    if (marie && createdCourses[0]) {
+      await User.findByIdAndUpdate(marie._id, {
+        $addToSet: { 'studentInfo.enrolledCourses': createdCourses[0]._id }
+      });
     }
 
     return createdCourses;

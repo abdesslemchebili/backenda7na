@@ -1,7 +1,6 @@
 const Course = require('../models/Course');
 const User = require('../models/User');
 const Class = require('../models/Class');
-const ClassGroup = require('../models/ClassGroup');
 const Enrollment = require('../models/Enrollment');
 
 // @desc    Récupérer tous les cours (avec filtres)
@@ -46,26 +45,8 @@ const getAllCourses = async (req, res) => {
       filters.status = 'published';
       filters.isPublic = true;
     } else if (req.user.role === 'student') {
-      const userDoc = await User.findById(req.user._id).select('studentInfo');
-      const courseIds = new Set();
-
-      const enrolledCourses = await Course.find({ 'enrolledStudents.student': req.user._id }).select('_id');
-      enrolledCourses.forEach((c) => courseIds.add(c._id.toString()));
-
-      if (userDoc?.studentInfo?.enrolledCourses?.length) {
-        userDoc.studentInfo.enrolledCourses.forEach((id) => courseIds.add(id.toString()));
-      }
-
-      if (userDoc?.studentInfo?.classGroupId) {
-        const group = await ClassGroup.findById(userDoc.studentInfo.classGroupId).select('courseId');
-        if (group?.courseId) courseIds.add(group.courseId.toString());
-      }
-
-      if (courseIds.size === 0) {
-        filters._id = { $in: [] };
-      } else {
-        filters._id = { $in: Array.from(courseIds) };
-      }
+      // Students only see courses they are enrolled in (active or completed)
+      filters['enrolledStudents.student'] = req.user._id;
     } else if (req.user.role === 'professor') {
       // Les professeurs voient leurs propres cours et les cours publics
       filters.$or = [
@@ -109,6 +90,13 @@ const getAllCourses = async (req, res) => {
   }
 };
 
+/** Resolve ObjectId whether the ref is populated or raw. */
+const refId = (ref) => {
+  if (!ref) return null;
+  if (typeof ref === 'object' && ref._id != null) return ref._id.toString();
+  return ref.toString();
+};
+
 // @desc    Récupérer un cours par ID
 // @route   GET /api/courses/:id
 // @access  Public (avec restrictions selon le rôle)
@@ -136,9 +124,12 @@ const getCourseById = async (req, res) => {
         });
       }
     } else if (req.user.role === 'student') {
-      const isEnrolled = course.enrolledStudents.some(
-        enrollment => enrollment.student.toString() === req.user._id.toString()
+      const userId = req.user._id.toString();
+      // After populate, student is a User doc — compare via _id (toString on the doc fails)
+      const isEnrolled = (course.enrolledStudents || []).some(
+        (enrollment) => refId(enrollment.student) === userId
       );
+
       if (!isEnrolled) {
         return res.status(403).json({
           error: 'Forbidden',
@@ -146,7 +137,7 @@ const getCourseById = async (req, res) => {
         });
       }
     } else if (req.user.role === 'professor') {
-      if (course.professor.toString() !== req.user._id.toString() && course.status !== 'published') {
+      if (refId(course.professor) !== req.user._id.toString() && course.status !== 'published') {
         return res.status(403).json({ 
           success: false, 
           error: 'Accès non autorisé à ce cours' 

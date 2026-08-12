@@ -14,6 +14,12 @@ const recordingSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    /** LiveKit Egress job id (room composite recording). */
+    egressId: {
+      type: String,
+      default: null,
+      index: true,
+    },
     externalUrl: {
       type: String,
       default: null,

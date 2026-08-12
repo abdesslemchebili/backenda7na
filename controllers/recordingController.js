@@ -6,6 +6,11 @@ const {
   upsertSessionRecording,
 } = require('../utils/recordingHelper');
 const { buildSignedFileUrl, getSignedUrlExpiryIso } = require('../utils/fileAccess');
+const {
+  isObjectStorageConfigured,
+  buildObjectPresignedUrl,
+  normalizeStorageKey,
+} = require('../utils/objectStorage');
 
 // GET /api/recordings/session/:classId
 const getBySession = async (req, res) => {
@@ -127,6 +132,17 @@ const getAccessUrl = async (req, res) => {
     }
     if (!recording.storageUrl) {
       return res.status(404).json({ error: 'NotFound', message: 'No playback URL' });
+    }
+
+    // LiveKit Egress → S3/R2 object key
+    if (isObjectStorageConfigured() && !recording.storageUrl.startsWith('/uploads/')) {
+      const key = normalizeStorageKey(recording.storageUrl);
+      const signed = await buildObjectPresignedUrl(key);
+      return res.json({
+        url: signed.url,
+        expiresAt: signed.expiresAt,
+        external: signed.external,
+      });
     }
 
     const url = buildSignedFileUrl(recording.storageUrl, req.user._id, req);

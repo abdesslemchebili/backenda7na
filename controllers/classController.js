@@ -25,6 +25,11 @@ const {
   createLiveKitToken,
 } = require('../utils/livekit');
 const {
+  isEgressConfigured,
+  startRoomRecording,
+  stopRoomRecording,
+} = require('../utils/livekitEgress');
+const {
   getStudentVisibleClassFilter,
   enrollClassGroupStudentsInSession,
   syncStudentCohortSessions,
@@ -658,7 +663,56 @@ const startSession = async (req, res) => {
       .populate('chapterId', 'title displayTitle order');
 
     if (typeof recordingStarted === 'boolean' && recordingStarted) {
-      await upsertSessionRecording(id, { status: 'processing' }, req.user._id);
+      const existing = await Recording.findOne({ session: id });
+      let egressId = existing?.egressId || null;
+
+      if (!egressId && isEgressConfigured()) {
+        try {
+          const started = await startRoomRecording({
+            roomName: creds.meetingId,
+            classId: id,
+          });
+          egressId = started.egressId;
+        } catch (egressErr) {
+          console.error('startSession egress:', egressErr.message || egressErr);
+          await upsertSessionRecording(
+            id,
+            {
+              status: 'failed',
+              failureReason: egressErr.message || 'Failed to start LiveKit Egress',
+            },
+            req.user._id
+          );
+          const withRecording = await attachRecordingToClass(updated);
+          return res.status(502).json({
+            ...withRecording,
+            error: 'EgressStartFailed',
+            message:
+              'La session a démarré mais l\'enregistrement LiveKit n\'a pas pu être lancé. Vérifiez S3/R2 et le quota Egress.',
+          });
+        }
+      } else if (!egressId && !isEgressConfigured()) {
+        console.warn(
+          'startSession: recording requested but Egress not configured (need LIVEKIT_* + S3_*)'
+        );
+      }
+
+      await upsertSessionRecording(
+        id,
+        { status: 'processing', egressId: egressId || undefined },
+        req.user._id
+      );
+    }
+
+    if (typeof recordingStarted === 'boolean' && recordingStarted === false) {
+      const existing = await Recording.findOne({ session: id });
+      if (existing?.egressId) {
+        try {
+          await stopRoomRecording(existing.egressId);
+        } catch (stopErr) {
+          console.error('startSession stop egress:', stopErr.message || stopErr);
+        }
+      }
     }
 
     const withRecording = await attachRecordingToClass(updated);
@@ -706,18 +760,34 @@ const endSession = async (req, res) => {
       .populate('professor', 'firstName lastName email')
       .populate('chapterId', 'title displayTitle order');
 
+    const existingRec = await Recording.findOne({ session: id });
+    if (existingRec?.egressId) {
+      try {
+        await stopRoomRecording(existingRec.egressId);
+      } catch (stopErr) {
+        console.error('endSession stop egress:', stopErr.message || stopErr);
+      }
+    }
+
     const hadRecording =
       classItem.liveConfig?.recordingStarted ||
       recordingUrl ||
-      (await Recording.findOne({ session: id }));
+      existingRec;
 
     if (hadRecording || recordingUrl) {
+      const nextStatus = recordingUrl
+        ? recordingStatus || 'ready'
+        : existingRec?.status === 'ready'
+          ? 'ready'
+          : recordingStatus || 'processing';
+
       await upsertSessionRecording(
         id,
         {
           externalUrl: recordingUrl || undefined,
-          status: recordingUrl ? recordingStatus || 'ready' : recordingStatus || 'processing',
+          status: nextStatus,
           durationSeconds,
+          egressId: existingRec?.egressId || undefined,
         },
         req.user._id
       );
