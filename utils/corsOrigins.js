@@ -16,9 +16,26 @@ function normalizeOriginUrl(value) {
   return `https://${trimmed.replace(/\/$/, '')}`;
 }
 
+function parseOriginList(value) {
+  if (!value) return [];
+  return String(value)
+    .split(',')
+    .map((part) => normalizeOriginUrl(part))
+    .filter(Boolean);
+}
+
+/**
+ * Allowed browser origins for CORS.
+ * - FRONTEND_URL / APP_URL: primary site(s)
+ * - CORS_ORIGINS: comma-separated extras (e.g. custom domain + www + http/https)
+ */
 function getAllowedOrigins() {
-  const frontend = normalizeOriginUrl(process.env.FRONTEND_URL);
-  return frontend ? [frontend, ...DEV_ORIGINS] : [...DEV_ORIGINS];
+  const fromEnv = [
+    ...parseOriginList(process.env.FRONTEND_URL),
+    ...parseOriginList(process.env.APP_URL),
+    ...parseOriginList(process.env.CORS_ORIGINS),
+  ];
+  return [...new Set([...fromEnv, ...DEV_ORIGINS])];
 }
 
 function isOriginAllowed(origin) {
@@ -32,6 +49,7 @@ function isOriginAllowed(origin) {
 module.exports = {
   DEV_ORIGINS,
   normalizeOriginUrl,
+  parseOriginList,
   getAllowedOrigins,
   isOriginAllowed,
 };
