@@ -3,6 +3,13 @@ const fs = require('fs');
 const Book = require('../models/Book');
 const Course = require('../models/Course');
 const { buildSignedFileUrl, getSignedUrlExpiryIso } = require('../utils/fileAccess');
+const {
+  isObjectStorageConfigured,
+  isLocalUploadPath,
+  buildObjectPresignedUrl,
+  uploadLocalFileToObjectStorage,
+  deleteObjectFromStorage,
+} = require('../utils/objectStorage');
 
 function pickLocalizedTitle(title, fallback = 'Sans titre') {
   if (!title) return fallback;
@@ -220,14 +227,34 @@ const uploadBookPdf = async (req, res) => {
       return res.status(400).json({ error: 'BadRequest', message: 'PDF file is required' });
     }
 
-    if (book.pdfUrl) {
-      const oldPath = path.join(__dirname, '..', book.pdfUrl.replace(/^\//, ''));
-      if (fs.existsSync(oldPath)) fs.unlink(oldPath, () => {});
+    const previousPdfUrl = book.pdfUrl;
+
+    if (isObjectStorageConfigured()) {
+      const safeName = (req.file.originalname || 'book.pdf').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const key = `books/${book._id}/${Date.now()}-${safeName}`;
+      await uploadLocalFileToObjectStorage({
+        localPath: req.file.path,
+        key,
+        contentType: req.file.mimetype || 'application/pdf',
+      });
+      // Local multer temp copy no longer needed once in R2
+      if (fs.existsSync(req.file.path)) fs.unlink(req.file.path, () => {});
+      book.pdfUrl = key;
+    } else {
+      book.pdfUrl = `/uploads/documents/${req.file.filename}`;
     }
 
-    book.pdfUrl = `/uploads/documents/${req.file.filename}`;
     book.pdfSize = req.file.size || 0;
     await book.save();
+
+    if (previousPdfUrl && previousPdfUrl !== book.pdfUrl) {
+      if (isLocalUploadPath(previousPdfUrl)) {
+        const oldPath = path.join(__dirname, '..', previousPdfUrl.replace(/^\//, ''));
+        if (fs.existsSync(oldPath)) fs.unlink(oldPath, () => {});
+      } else {
+        await deleteObjectFromStorage(previousPdfUrl);
+      }
+    }
 
     res.json(formatBook(await Book.findById(book._id).populate('language', 'name code icon').populate('level', 'code name').lean()));
   } catch (err) {
@@ -275,11 +302,41 @@ const downloadBookPdf = async (req, res) => {
       return res.status(403).json({ error: 'Forbidden', message: 'Not allowed to download this book' });
     }
 
+    const filename = `${pickLocalizedTitle(book.title).replace(/[^\w\s-]/g, '') || 'book'}.pdf`;
+
+    // Object storage (R2/S3) — durable; preferred in production
+    if (!isLocalUploadPath(book.pdfUrl) && isObjectStorageConfigured()) {
+      try {
+        const signed = await buildObjectPresignedUrl(book.pdfUrl);
+        return res.json({
+          url: signed.url,
+          expiresAt: signed.expiresAt || getSignedUrlExpiryIso(),
+          filename,
+        });
+      } catch (storageErr) {
+        console.error('downloadBookPdf storage:', storageErr.message || storageErr);
+        return res.status(404).json({
+          error: 'NotFound',
+          message: 'PDF file missing in storage. Re-upload the book PDF from Admin → Books.',
+        });
+      }
+    }
+
+    // Legacy local /uploads path (ephemeral on Render)
+    const absCheck = path.join(__dirname, '..', book.pdfUrl.replace(/^\//, ''));
+    if (!fs.existsSync(absCheck)) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message:
+          'PDF file missing on server disk. Re-upload the book PDF from Admin → Books (configure S3/R2 for durable storage).',
+      });
+    }
+
     const url = buildSignedFileUrl(book.pdfUrl, req.user?._id, req);
     res.json({
       url,
       expiresAt: getSignedUrlExpiryIso(),
-      filename: `${pickLocalizedTitle(book.title).replace(/[^\w\s-]/g, '') || 'book'}.pdf`,
+      filename,
     });
   } catch (err) {
     console.error('downloadBookPdf:', err);

@@ -1,5 +1,6 @@
-const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const fs = require('fs');
 
 const DEFAULT_PRESIGN_TTL = 3600;
 
@@ -18,6 +19,11 @@ function getObjectStorageConfig() {
 function isObjectStorageConfigured() {
   const { accessKey, secret, bucket } = getObjectStorageConfig();
   return Boolean(accessKey && secret && bucket);
+}
+
+function isLocalUploadPath(storedPath) {
+  if (!storedPath || typeof storedPath !== 'string') return false;
+  return storedPath.startsWith('/uploads/') || storedPath.startsWith('uploads/');
 }
 
 function createS3Client() {
@@ -47,6 +53,8 @@ function normalizeStorageKey(locationOrKey) {
   if (!locationOrKey || typeof locationOrKey !== 'string') return null;
   const raw = locationOrKey.trim();
   if (!raw) return null;
+
+  if (isLocalUploadPath(raw)) return null;
 
   if (raw.startsWith('s3://')) {
     const withoutScheme = raw.slice('s3://'.length);
@@ -99,10 +107,52 @@ async function buildObjectPresignedUrl(storageUrl, expiresIn = DEFAULT_PRESIGN_T
   };
 }
 
+/**
+ * Upload a local file to S3/R2 and return the object key.
+ */
+async function uploadLocalFileToObjectStorage({ localPath, key, contentType }) {
+  if (!isObjectStorageConfigured()) {
+    throw new Error('Object storage (S3/R2) is not configured');
+  }
+  const cfg = getObjectStorageConfig();
+  const client = createS3Client();
+  const stat = fs.statSync(localPath);
+  await client.send(
+    new PutObjectCommand({
+      Bucket: cfg.bucket,
+      Key: key,
+      Body: fs.createReadStream(localPath),
+      ContentType: contentType || 'application/octet-stream',
+      ContentLength: stat.size,
+    })
+  );
+  return key;
+}
+
+async function deleteObjectFromStorage(storageUrl) {
+  const key = normalizeStorageKey(storageUrl);
+  if (!key || !isObjectStorageConfigured()) return;
+  const cfg = getObjectStorageConfig();
+  const client = createS3Client();
+  try {
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: cfg.bucket,
+        Key: key,
+      })
+    );
+  } catch (err) {
+    console.warn('deleteObjectFromStorage:', err.message || err);
+  }
+}
+
 module.exports = {
   getObjectStorageConfig,
   isObjectStorageConfigured,
+  isLocalUploadPath,
   normalizeStorageKey,
   buildObjectPresignedUrl,
+  uploadLocalFileToObjectStorage,
+  deleteObjectFromStorage,
   DEFAULT_PRESIGN_TTL,
 };
