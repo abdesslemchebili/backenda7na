@@ -19,11 +19,37 @@ async function professorTeachesStudent(professorId, studentId) {
 }
 
 async function studentEnrolledInClass(studentId, classDoc) {
+  const sid = studentId.toString();
+
+  // Déjà inscrit à la session live
+  if (
+    (classDoc.enrolledStudents || []).some(
+      (e) => e.student && e.student.toString() === sid
+    )
+  ) {
+    return true;
+  }
+
+  // Inscrit au cours
   const course = await Course.findById(classDoc.course).select('enrolledStudents');
-  if (!course) return false;
-  return course.enrolledStudents.some(
-    (e) => e.student && e.student.toString() === studentId.toString()
-  );
+  if (
+    course?.enrolledStudents?.some(
+      (e) => e.student && e.student.toString() === sid
+    )
+  ) {
+    return true;
+  }
+
+  // Membre de la cohorte liée à la session
+  if (classDoc.classGroupId) {
+    const ClassGroup = require('../models/ClassGroup');
+    const group = await ClassGroup.findById(classDoc.classGroupId).select('studentIds');
+    if ((group?.studentIds || []).some((id) => id && id.toString() === sid)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function assertExportAccess(req, { courseId, classId }) {

@@ -1,6 +1,7 @@
 const Attendance = require('../models/Attendance');
 const Class = require('../models/Class');
 const Course = require('../models/Course');
+const ClassGroup = require('../models/ClassGroup');
 const XLSX = require('xlsx');
 const {
   professorOwnsCourse,
@@ -8,11 +9,12 @@ const {
   studentEnrolledInClass,
   assertExportAccess
 } = require('../utils/attendanceAuth');
+const { enrollStudentInCourseFromClassGroup } = require('../utils/courseEnrollment');
 
 // POST /api/classes/:classId/attendance - mark attendance (professor/admin only)
 const markAttendance = async (req, res) => {
   try {
-    const { classId } = req.params;
+    const classId = req.params.classId || req.params.id;
     const { studentId, status, joinedAt, leftAt } = req.body;
     const classDoc = await Class.findById(classId);
     if (!classDoc) {
@@ -40,8 +42,28 @@ const markAttendance = async (req, res) => {
     if (!enrolled) {
       return res.status(403).json({
         error: 'Forbidden',
-        message: 'Student is not enrolled in this course'
+        message: 'Étudiant non inscrit à cette session / cohorte / cours'
       });
+    }
+
+    // Rattrapage inscription cours + session si l'élève est seulement en cohorte
+    if (classDoc.classGroupId) {
+      try {
+        const group = await ClassGroup.findById(classDoc.classGroupId);
+        if (group) {
+          await enrollStudentInCourseFromClassGroup(studentId, group);
+        }
+      } catch (enrollErr) {
+        console.error('markAttendance enrollCourse:', enrollErr.message);
+      }
+    }
+    const sidStr = studentId.toString();
+    const onSession = (classDoc.enrolledStudents || []).some(
+      (e) => e.student && e.student.toString() === sidStr
+    );
+    if (!onSession) {
+      classDoc.enrolledStudents.push({ student: studentId, enrolledAt: new Date() });
+      await classDoc.save();
     }
 
     let att = await Attendance.findOne({ class: classId, student: studentId });

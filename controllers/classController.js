@@ -264,10 +264,24 @@ const createClass = async (req, res) => {
     if (Number.isNaN(startAt.getTime())) {
       return res.status(400).json({ error: 'BadRequest', message: 'schedule.startTime invalide' });
     }
-    if (startAt.getTime() < Date.now() - 60_000) {
+    const endAt = classData.schedule.endTime
+      ? new Date(classData.schedule.endTime)
+      : null;
+    if (endAt && Number.isNaN(endAt.getTime())) {
+      return res.status(400).json({ error: 'BadRequest', message: 'schedule.endTime invalide' });
+    }
+    // Autoriser un début déjà passé tant que la session n'est pas terminée
+    // (évite les faux positifs fuseau horaire / « maintenant »).
+    if (endAt && endAt.getTime() <= Date.now()) {
       return res.status(400).json({
         error: 'BadRequest',
-        message: 'La date/heure de début doit être dans le futur pour que les étudiants la voient dans leur planning',
+        message: 'La session serait déjà terminée. Choisissez une heure de fin dans le futur.',
+      });
+    }
+    if (endAt && endAt.getTime() <= startAt.getTime()) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'schedule.endTime doit être après schedule.startTime',
       });
     }
 
