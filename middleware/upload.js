@@ -60,7 +60,7 @@ const fileFilterAudio = (req, file, cb) => {
 const uploadDocument = multer({
   storage: docStorage,
   fileFilter: fileFilterDoc,
-  limits: { fileSize: 20 * 1024 * 1024 }
+  limits: { fileSize: 100 * 1024 * 1024 }
 }).single('file');
 
 const uploadImage = multer({
