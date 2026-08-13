@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Course = require('../models/Course');
+const Language = require('../models/Language');
 const {
   sendPaymentStatusUpdate,
   sendUserInvitation,
@@ -7,6 +8,69 @@ const {
 } = require('../utils/emailService');
 const { enrollStudentFromAssignedClassGroup } = require('../utils/courseEnrollment');
 const { writeAuditLog } = require('../utils/auditLog');
+
+const SPECIALTY_BY_CODE = {
+  en: 'english',
+  eng: 'english',
+  english: 'english',
+  fr: 'french',
+  fra: 'french',
+  french: 'french',
+  ar: 'arabic',
+  ara: 'arabic',
+  arabic: 'arabic',
+  es: 'spanish',
+  spa: 'spanish',
+  spanish: 'spanish',
+  de: 'german',
+  ger: 'german',
+  deu: 'german',
+  german: 'german',
+  it: 'italian',
+  ita: 'italian',
+  italian: 'italian',
+};
+
+function parseDateOfBirth(raw) {
+  if (raw == null || raw === '') return { value: null };
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return { error: 'Date de naissance invalide' };
+  }
+  const today = new Date();
+  if (date > today) {
+    return { error: 'La date de naissance ne peut pas être dans le futur' };
+  }
+  const min = new Date();
+  min.setFullYear(min.getFullYear() - 120);
+  if (date < min) {
+    return { error: 'Date de naissance invalide' };
+  }
+  return { value: date };
+}
+
+async function resolveTeachingLanguages(rawIds) {
+  const ids = [...new Set(
+    (Array.isArray(rawIds) ? rawIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  )];
+  if (!ids.length) {
+    return { error: 'Au moins une langue enseignée est requise pour un professeur' };
+  }
+  const languages = await Language.find({ _id: { $in: ids }, active: true }).select('_id code name');
+  if (languages.length !== ids.length) {
+    return { error: 'Une ou plusieurs langues sont invalides ou inactives' };
+  }
+  const specialties = languages
+    .map((lang) => SPECIALTY_BY_CODE[String(lang.code || '').toLowerCase()])
+    .filter(Boolean)
+    .map((language) => ({ language, level: 'all' }));
+  return {
+    teachingLanguages: languages.map((l) => l._id),
+    specialties,
+  };
+}
 
 // @desc    Créer un utilisateur (étudiant / professeur / admin)
 // @route   POST /api/users
@@ -23,12 +87,22 @@ const createUser = async (req, res) => {
       language = 'fr',
       sendInviteEmail = true,
       markStudentPaid = false,
+      teachingLanguageIds,
+      dateOfBirth,
     } = req.body || {};
 
     if (!firstName || !lastName || !email) {
       return res.status(400).json({
         error: 'ValidationError',
         message: 'Prénom, nom et email sont requis',
+      });
+    }
+
+    const dob = parseDateOfBirth(dateOfBirth);
+    if (dob.error) {
+      return res.status(400).json({
+        error: 'ValidationError',
+        message: dob.error,
       });
     }
 
@@ -44,6 +118,21 @@ const createUser = async (req, res) => {
         error: 'ValidationError',
         message: 'Le niveau admin est requis pour un compte admin',
       });
+    }
+
+    let professorInfo;
+    if (role === 'professor') {
+      const resolved = await resolveTeachingLanguages(teachingLanguageIds);
+      if (resolved.error) {
+        return res.status(400).json({
+          error: 'ValidationError',
+          message: resolved.error,
+        });
+      }
+      professorInfo = {
+        teachingLanguages: resolved.teachingLanguages,
+        specialties: resolved.specialties,
+      };
     }
 
     const normalizedEmail = String(email).trim().toLowerCase();
@@ -77,9 +166,11 @@ const createUser = async (req, res) => {
       role,
       adminLevel: role === 'admin' ? adminLevel : null,
       status,
+      dateOfBirth: dob.value,
       emailVerified: true,
       mustChangePassword: true,
       paymentStatus: role === 'student' && markStudentPaid ? 'PAYMENT_APPROVED' : undefined,
+      ...(professorInfo ? { professorInfo } : {}),
     });
     await user.save();
 
@@ -97,14 +188,23 @@ const createUser = async (req, res) => {
       action: 'user.create',
       targetType: 'User',
       targetId: user._id,
-      details: { role, emailSent, status },
+      details: {
+        role,
+        emailSent,
+        status,
+        teachingLanguageIds: professorInfo?.teachingLanguages || undefined,
+      },
     });
+
+    const populated = await User.findById(user._id)
+      .select('-password -emailVerificationToken -passwordResetToken')
+      .populate('professorInfo.teachingLanguages', 'name code nativeName icon');
 
     res.status(201).json({
       message: emailSent
         ? 'Utilisateur créé et invitation envoyée'
         : 'Utilisateur créé (email non envoyé — communiquez le mot de passe manuellement)',
-      user: {
+      user: populated || {
         _id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
@@ -165,7 +265,8 @@ const getAllUsers = async (req, res) => {
       .skip(skip)
       .limit(parseInt(limit))
       .populate('studentInfo.enrolledCourses', 'title')
-      .populate('professorInfo.courses', 'title');
+      .populate('professorInfo.courses', 'title')
+      .populate('professorInfo.teachingLanguages', 'name code nativeName icon');
 
     const total = await User.countDocuments(filters);
 
@@ -196,7 +297,8 @@ const getUserById = async (req, res) => {
     const user = await User.findById(id)
       .select('-password -emailVerificationToken -passwordResetToken')
       .populate('studentInfo.enrolledCourses', 'title description')
-      .populate('professorInfo.courses', 'title description');
+      .populate('professorInfo.courses', 'title description')
+      .populate('professorInfo.teachingLanguages', 'name code nativeName icon');
 
     if (!user) {
       return res.status(404).json({ 
@@ -221,36 +323,192 @@ const getUserById = async (req, res) => {
 const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    const body = { ...(req.body || {}) };
+    const isAdmin = req.user.role === 'admin';
 
-    // Empêcher la modification de certains champs sensibles
-    delete updateData.password;
-    delete updateData.email;
-    delete updateData.role;
-    delete updateData.adminLevel;
-    delete updateData.emailVerified;
-    delete updateData.loginAttempts;
-    delete updateData.lockUntil;
+    const existing = await User.findById(id);
+    if (!existing) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'User not found',
+      });
+    }
 
-    const user = await User.findByIdAndUpdate(
-      id,
-      updateData,
-      { new: true, runValidators: true }
-    ).select('-password -emailVerificationToken -passwordResetToken');
+    // Never allow these via this endpoint
+    delete body.emailVerified;
+    delete body.loginAttempts;
+    delete body.lockUntil;
+    delete body.refreshToken;
+    delete body.emailVerificationToken;
+    delete body.passwordResetToken;
+
+    const update = {};
+
+    if (typeof body.firstName === 'string' && body.firstName.trim()) {
+      update.firstName = body.firstName.trim();
+    }
+    if (typeof body.lastName === 'string' && body.lastName.trim()) {
+      update.lastName = body.lastName.trim();
+    }
+    if (typeof body.phone === 'string') {
+      const phone = body.phone.trim();
+      // Only set when non-empty (empty string fails the phone regex)
+      if (phone) update.phone = phone;
+    }
+    if (typeof body.country === 'string') {
+      update.country = body.country.trim();
+    }
+    if (body.dateOfBirth !== undefined) {
+      const dob = parseDateOfBirth(body.dateOfBirth);
+      if (dob.error) {
+        return res.status(400).json({
+          error: 'ValidationError',
+          message: dob.error,
+        });
+      }
+      update.dateOfBirth = dob.value;
+    }
+
+    if (isAdmin) {
+      if (typeof body.email === 'string' && body.email.trim()) {
+        const nextEmail = body.email.trim().toLowerCase();
+        if (nextEmail !== existing.email) {
+          const clash = await User.findByEmail(nextEmail);
+          if (clash && clash._id.toString() !== id) {
+            return res.status(400).json({
+              error: 'Conflict',
+              message: 'Cet email est déjà utilisé par un autre compte',
+            });
+          }
+          update.email = nextEmail;
+        }
+      }
+
+      if (body.status) {
+        const validStatuses = ['invited', 'pending', 'verified', 'reglo', 'suspended'];
+        if (!validStatuses.includes(body.status)) {
+          return res.status(400).json({ error: 'BadRequest', message: 'Statut invalide' });
+        }
+        update.status = body.status;
+        if (body.status === 'reglo') update.paymentStatus = 'PAYMENT_APPROVED';
+      }
+
+      if (body.role) {
+        const validRoles = ['student', 'professor', 'admin'];
+        if (!validRoles.includes(body.role)) {
+          return res.status(400).json({ error: 'BadRequest', message: 'Rôle invalide' });
+        }
+        // Changing roles: super or full admin
+        if (!['super', 'full'].includes(req.user.adminLevel || '')) {
+          return res.status(403).json({
+            error: 'Forbidden',
+            message: 'Niveau admin insuffisant pour changer le rôle',
+          });
+        }
+        update.role = body.role;
+        if (body.role === 'admin') {
+          update.adminLevel = body.adminLevel || existing.adminLevel || 'full';
+        } else {
+          update.adminLevel = null;
+        }
+        if (body.role !== 'professor') {
+          update['professorInfo.teachingLanguages'] = [];
+        }
+      } else if (body.adminLevel != null && existing.role === 'admin') {
+        update.adminLevel = body.adminLevel;
+      }
+
+      const nextRole = update.role || existing.role;
+      if (nextRole === 'professor' && body.teachingLanguageIds !== undefined) {
+        const resolved = await resolveTeachingLanguages(body.teachingLanguageIds);
+        if (resolved.error) {
+          return res.status(400).json({
+            error: 'ValidationError',
+            message: resolved.error,
+          });
+        }
+        update['professorInfo.teachingLanguages'] = resolved.teachingLanguages;
+        update['professorInfo.specialties'] = resolved.specialties;
+      } else if (update.role === 'professor' && body.teachingLanguageIds === undefined) {
+        const existingIds = existing.professorInfo?.teachingLanguages || [];
+        if (!existingIds.length) {
+          return res.status(400).json({
+            error: 'ValidationError',
+            message: 'Au moins une langue enseignée est requise pour un professeur',
+          });
+        }
+      }
+
+      if (typeof body.password === 'string' && body.password.trim().length >= 6) {
+        existing.password = body.password.trim();
+        existing.mustChangePassword =
+          body.mustChangePassword !== undefined ? !!body.mustChangePassword : true;
+        Object.entries(update).forEach(([key, value]) => {
+          existing.set(key, value);
+        });
+        await existing.save(); // triggers password hash pre-save
+        await existing.populate('professorInfo.teachingLanguages', 'name code nativeName icon');
+        const sanitized = existing.toObject();
+        delete sanitized.password;
+        delete sanitized.emailVerificationToken;
+        delete sanitized.passwordResetToken;
+        await writeAuditLog(req, {
+          action: 'user.update',
+          targetType: 'User',
+          targetId: existing._id,
+          details: { fields: Object.keys(update).concat(['password']) },
+        });
+        return res.json(sanitized);
+      }
+
+      if (body.mustChangePassword !== undefined) {
+        update.mustChangePassword = !!body.mustChangePassword;
+      }
+    } else {
+      // Non-admin owners cannot change auth-sensitive fields here
+      delete body.password;
+      delete body.email;
+      delete body.role;
+      delete body.adminLevel;
+      delete body.status;
+    }
+
+    const user = await User.findByIdAndUpdate(id, update, {
+      new: true,
+      runValidators: true,
+    })
+      .select('-password -emailVerificationToken -passwordResetToken')
+      .populate('professorInfo.teachingLanguages', 'name code nativeName icon');
 
     if (!user) {
-      return res.status(404).json({ 
-        error: 'NotFound', 
-        message: 'User not found' 
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'User not found',
+      });
+    }
+
+    if (isAdmin) {
+      await writeAuditLog(req, {
+        action: 'user.update',
+        targetType: 'User',
+        targetId: user._id,
+        details: { fields: Object.keys(update) },
       });
     }
 
     res.json(user);
   } catch (error) {
     console.error('Erreur updateUser:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Erreur lors de la mise à jour de l\'utilisateur' 
+    if (error?.code === 11000) {
+      return res.status(400).json({
+        error: 'Conflict',
+        message: 'Email déjà utilisé',
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la mise à jour de l\'utilisateur',
+      message: error.message,
     });
   }
 };
@@ -453,10 +711,10 @@ const getUserStats = async (req, res) => {
 // @access  Admin only
 const changeUserRole = async (req, res) => {
   try {
-    if (req.user.adminLevel !== 'super') {
+    if (!['super', 'full'].includes(req.user.adminLevel || '')) {
       return res.status(403).json({
         error: 'Forbidden',
-        message: 'Only super administrators can change user roles'
+        message: 'Only full/super administrators can change user roles'
       });
     }
 

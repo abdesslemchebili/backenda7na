@@ -46,6 +46,10 @@ const userSchema = new mongoose.Schema({
     trim: true,
     default: ''
   },
+  dateOfBirth: {
+    type: Date,
+    default: null,
+  },
   mustChangePassword: {
     type: Boolean,
     default: false
@@ -147,6 +151,11 @@ const userSchema = new mongoose.Schema({
       min: 0,
       default: 0
     },
+    /** Langues enseignées (catalogue Language) */
+    teachingLanguages: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Language',
+    }],
     specialties: [{
       language: {
         type: String,

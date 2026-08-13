@@ -31,7 +31,7 @@ router.post('/', authenticateToken, authorizeRoles('admin'), authorizeAdminLevel
 router.get('/stats/overview', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full', 'support'), getUserStats);
 router.delete('/:id', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full'), deleteUser);
 router.patch('/:id/status', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full', 'support'), updateUserStatus);
-router.patch('/:id/role', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super'), changeUserRole);
+router.patch('/:id/role', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full'), changeUserRole);
 
 // Routes pour admin ou propriétaire du profil
 router.get('/:id', authenticateToken, requireUserOwnership, getUserById);
