@@ -102,10 +102,20 @@ async function handleEgressEvent(event) {
       failureReason: null,
     });
 
-    await Class.findByIdAndUpdate(recording.session, {
+    // Keep recording URL; if the host already ended (or abandoned) the live room,
+    // mark the class completed so dashboards that filter on status still find it.
+    const classItem = await Class.findById(recording.session).select('status liveConfig');
+    const classUpdate = {
       'liveConfig.recordingUrl': key,
       'liveConfig.recordingStarted': true,
-    });
+    };
+    if (classItem && (classItem.status === 'ongoing' || classItem.liveConfig?.sessionEndedAt)) {
+      classUpdate.status = 'completed';
+      if (!classItem.liveConfig?.sessionEndedAt) {
+        classUpdate['liveConfig.sessionEndedAt'] = new Date();
+      }
+    }
+    await Class.findByIdAndUpdate(recording.session, classUpdate);
 
     return updated;
   }

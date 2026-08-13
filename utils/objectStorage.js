@@ -181,6 +181,30 @@ async function uploadLocalFileToObjectStorage({ localPath, key, contentType }) {
   return key;
 }
 
+/**
+ * Stream an object from S3/R2 (Body is a Node Readable).
+ */
+async function getObjectStream(storageUrl) {
+  const key = normalizeStorageKey(storageUrl);
+  if (!key || !isObjectStorageConfigured()) {
+    throw new Error('Object not available in storage');
+  }
+  const cfg = getObjectStorageConfig();
+  const client = createS3Client();
+  const out = await client.send(
+    new GetObjectCommand({
+      Bucket: cfg.bucket,
+      Key: key,
+    })
+  );
+  return {
+    key,
+    body: out.Body,
+    contentType: out.ContentType || 'application/octet-stream',
+    contentLength: out.ContentLength,
+  };
+}
+
 async function deleteObjectFromStorage(storageUrl) {
   const key = normalizeStorageKey(storageUrl);
   if (!key || !isObjectStorageConfigured()) return;
@@ -207,6 +231,7 @@ module.exports = {
   objectExists,
   buildObjectPresignedUrl,
   uploadLocalFileToObjectStorage,
+  getObjectStream,
   deleteObjectFromStorage,
   DEFAULT_PRESIGN_TTL,
 };

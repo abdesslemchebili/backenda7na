@@ -17,6 +17,7 @@ const contentAdmin = [
 router.get('/', authenticateToken, materialCtrl.listMaterials);
 router.post('/', ...contentAdmin, uploadMaterial, materialCtrl.createMaterial);
 router.get('/:id/download', authenticateToken, materialCtrl.downloadMaterial);
+router.get('/:id/stream', authenticateToken, materialCtrl.streamMaterial);
 router.put('/:id', ...contentAdmin, materialCtrl.updateMaterial);
 router.delete('/:id', ...contentAdmin, materialCtrl.deleteMaterial);
 

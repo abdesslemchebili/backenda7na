@@ -5,13 +5,19 @@ const Chapter = require('../models/Chapter');
 const Book = require('../models/Book');
 const Course = require('../models/Course');
 const { MATERIAL_TYPES } = require('../models/Material');
-const { buildSignedFileUrl, getSignedUrlExpiryIso } = require('../utils/fileAccess');
+const {
+  buildSignedFileUrl,
+  getSignedUrlExpiryIso,
+  normalizeStoredPath,
+  getAbsoluteFilePath,
+} = require('../utils/fileAccess');
 const { pickLocalizedTitle } = require('./bookController');
 const {
   isObjectStorageConfigured,
   isLocalUploadPath,
   buildObjectPresignedUrl,
   uploadLocalFileToObjectStorage,
+  getObjectStream,
 } = require('../utils/objectStorage');
 
 function formatMaterial(doc) {
@@ -232,6 +238,67 @@ const deleteMaterial = async (req, res) => {
   }
 };
 
+// GET /api/materials/:id/stream — proxy binary (needed so live can captureStream / publish to LiveKit)
+const streamMaterial = async (req, res) => {
+  try {
+    const material = await Material.findById(req.params.id).lean();
+    if (!material) {
+      return res.status(404).json({ error: 'NotFound', message: 'Material not found' });
+    }
+
+    const allowed = await canAccessMaterial(req, material);
+    if (!allowed) {
+      return res.status(403).json({ error: 'Forbidden', message: 'Not allowed' });
+    }
+
+    if (material.externalUrl && !material.fileUrl) {
+      return res.redirect(material.externalUrl);
+    }
+    if (!material.fileUrl) {
+      return res.status(404).json({ error: 'NotFound', message: 'File not available' });
+    }
+
+    if (!isLocalUploadPath(material.fileUrl) && isObjectStorageConfigured()) {
+      try {
+        const obj = await getObjectStream(material.fileUrl);
+        res.setHeader('Content-Type', obj.contentType || 'audio/mpeg');
+        res.setHeader('Cache-Control', 'private, max-age=300');
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        if (obj.contentLength != null) {
+          res.setHeader('Content-Length', String(obj.contentLength));
+        }
+        if (obj.body && typeof obj.body.pipe === 'function') {
+          obj.body.pipe(res);
+          return;
+        }
+        // SDK v3 sometimes returns async iterable
+        const chunks = [];
+        for await (const chunk of obj.body) chunks.push(chunk);
+        res.end(Buffer.concat(chunks));
+        return;
+      } catch (storageErr) {
+        console.error('streamMaterial storage:', storageErr.message || storageErr);
+        return res.status(404).json({ error: 'NotFound', message: 'File missing in storage' });
+      }
+    }
+
+    const normalized = normalizeStoredPath(material.fileUrl);
+    const abs = getAbsoluteFilePath(normalized);
+    if (!abs || !fs.existsSync(abs)) {
+      return res.status(404).json({ error: 'NotFound', message: 'File not found on disk' });
+    }
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    fs.createReadStream(abs).pipe(res);
+  } catch (err) {
+    console.error('streamMaterial:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal Server Error', message: err.message });
+    }
+  }
+};
+
 // GET /api/materials/:id/download
 const downloadMaterial = async (req, res) => {
   try {
@@ -287,5 +354,6 @@ module.exports = {
   updateMaterial,
   deleteMaterial,
   downloadMaterial,
+  streamMaterial,
   formatMaterial,
 };
