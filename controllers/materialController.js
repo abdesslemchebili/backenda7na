@@ -62,6 +62,13 @@ async function canAccessMaterial(req, material) {
       }).select('_id');
       return !!enrolled;
     }
+    if (req.user.role === 'professor') {
+      const teaches = await Course.findOne({
+        bookId: material.book,
+        professor: req.user._id,
+      }).select('_id');
+      return !!teaches;
+    }
     return true;
   }
 

@@ -30,5 +30,8 @@ require('./Lead');
 require('./Settings');
 require('./EnrollmentRequest');
 require('./AuditLog');
+require('./PracticePack');
+require('./GroupChallenge');
+require('./PracticeScore');
 
 module.exports = {};

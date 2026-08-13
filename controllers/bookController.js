@@ -49,17 +49,23 @@ function formatBook(doc) {
 }
 
 async function canReadBook(req, book) {
-  if (!req.user) return book.status === 'published' && book.active;
+  if (!req.user) return book.status === 'published' && book.active !== false;
   if (req.user.role === 'admin') return true;
-  if (book.status === 'published' && book.active) return true;
-  if (req.user.role === 'professor' || req.user.role === 'admin') {
-    return book.createdBy?.toString() === req.user._id.toString();
+  if (book.status === 'published' && book.active !== false) return true;
+  if (req.user.role === 'professor') {
+    if (book.createdBy?.toString() === req.user._id.toString()) return true;
+    return isProfessorOfBookCourse(req.user._id, book._id);
   }
   return false;
 }
 
 async function isEnrolledInBookCourse(userId, bookId) {
   const course = await Course.findOne({ bookId, 'enrolledStudents.student': userId }).select('_id');
+  return !!course;
+}
+
+async function isProfessorOfBookCourse(userId, bookId) {
+  const course = await Course.findOne({ bookId, professor: userId }).select('_id');
   return !!course;
 }
 
@@ -297,6 +303,9 @@ const downloadBookPdf = async (req, res) => {
     let allowed = await canReadBook(req, book);
     if (!allowed && req.user?.role === 'student') {
       allowed = await isEnrolledInBookCourse(req.user._id, book._id);
+    }
+    if (!allowed && req.user?.role === 'professor') {
+      allowed = await isProfessorOfBookCourse(req.user._id, book._id);
     }
     if (!allowed) {
       return res.status(403).json({ error: 'Forbidden', message: 'Not allowed to download this book' });

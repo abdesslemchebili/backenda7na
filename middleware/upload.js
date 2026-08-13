@@ -33,7 +33,10 @@ const fileFilterDoc = (req, file, cb) => {
   const allowed = /\.(pdf|doc|docx|ppt|pptx)$/i.test(file.originalname) ||
     ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'].includes(file.mimetype);
-  cb(null, !!allowed);
+  if (!allowed) {
+    return cb(new Error('File type not allowed'));
+  }
+  cb(null, true);
 };
 
 const fileFilterImage = (req, file, cb) => {
@@ -103,4 +106,30 @@ const uploadMaterial = multer({
   limits: { fileSize: 30 * 1024 * 1024 }
 }).single('file');
 
-module.exports = { uploadDocument, uploadImage, uploadAudio, uploadMaterial };
+module.exports = {
+  uploadDocument,
+  uploadImage,
+  uploadAudio,
+  uploadMaterial,
+  /** Express error middleware for multer failures (size / type). */
+  handleUploadError(err, req, res, next) {
+    if (!err) return next();
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({
+          error: 'ValidationError',
+          message: 'Fichier trop volumineux (PDF max 100 Mo).',
+        });
+      }
+      return res.status(400).json({ error: 'ValidationError', message: err.message });
+    }
+    if (err.message && /file type|File type|not allowed/i.test(err.message)) {
+      return res.status(400).json({ error: 'ValidationError', message: 'Type de fichier non autorisé (PDF requis).' });
+    }
+    // multer fileFilter rejection often passes Error
+    if (err.message === 'File type not allowed' || err.code === 'LIMIT_UNEXPECTED_FILE') {
+      return res.status(400).json({ error: 'ValidationError', message: err.message });
+    }
+    return next(err);
+  },
+};

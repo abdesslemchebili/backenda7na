@@ -101,6 +101,7 @@ app.use('/api/exercises', require('./routes/exercises'));
 app.use('/api/games', require('./routes/games'));
 app.use('/api/gamification', require('./routes/gamification'));
 app.use('/api/progress', require('./routes/progress'));
+app.use('/api/practice', require('./routes/practice'));
 
 app.use('*', (req, res) => {
   res.status(404).json({
