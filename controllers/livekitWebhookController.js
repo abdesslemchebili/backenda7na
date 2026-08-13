@@ -74,8 +74,16 @@ async function handleEgressEvent(event) {
 
   if (isEgressTerminalSuccess(info.status)) {
     const file = extractEgressFile(info);
-    const key = normalizeStorageKey(file?.location);
+    // Prefer filename (object key) when location is a path-style URL that includes the bucket
+    const key =
+      normalizeStorageKey(file?.location) ||
+      normalizeStorageKey(file?.filename);
     if (!key) {
+      console.warn('livekit webhook: egress complete without usable key', {
+        egressId: info.egressId,
+        location: file?.location,
+        filename: file?.filename,
+      });
       await upsertSessionRecording(recording.session, {
         egressId: info.egressId,
         status: 'failed',
@@ -83,6 +91,8 @@ async function handleEgressEvent(event) {
       });
       return;
     }
+
+    console.log('livekit webhook: recording ready', { egressId: info.egressId, key });
 
     const updated = await upsertSessionRecording(recording.session, {
       egressId: info.egressId,

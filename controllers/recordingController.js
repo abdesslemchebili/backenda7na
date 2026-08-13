@@ -10,6 +10,7 @@ const {
   isObjectStorageConfigured,
   buildObjectPresignedUrl,
   normalizeStorageKey,
+  objectExists,
 } = require('../utils/objectStorage');
 
 // GET /api/recordings/session/:classId
@@ -137,6 +138,37 @@ const getAccessUrl = async (req, res) => {
     // LiveKit Egress → S3/R2 object key
     if (isObjectStorageConfigured() && !recording.storageUrl.startsWith('/uploads/')) {
       const key = normalizeStorageKey(recording.storageUrl);
+      if (!key) {
+        return res.status(404).json({
+          error: 'NotFound',
+          message: 'Clé de stockage invalide pour cet enregistrement',
+        });
+      }
+
+      // Heal keys that were stored with a leading bucket name (path-style R2 bug)
+      if (key !== recording.storageUrl) {
+        await Recording.updateOne({ _id: recording._id }, { $set: { storageUrl: key } });
+        if (
+          classItem.liveConfig?.recordingUrl &&
+          String(classItem.liveConfig.recordingUrl).includes(recording.storageUrl)
+        ) {
+          await Class.findByIdAndUpdate(classItem._id, {
+            'liveConfig.recordingUrl': key,
+          });
+        }
+      }
+
+      const exists = await objectExists(key);
+      if (!exists) {
+        return res.status(404).json({
+          error: 'NotFound',
+          message:
+            'Fichier d’enregistrement introuvable sur le stockage (NoSuchKey). ' +
+            'L’egress LiveKit n’a peut‑être pas fini d’uploader, ou le webhook n’a pas été reçu.',
+          key,
+        });
+      }
+
       const signed = await buildObjectPresignedUrl(key);
       return res.json({
         url: signed.url,

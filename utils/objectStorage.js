@@ -1,4 +1,10 @@
-const { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const {
+  S3Client,
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  DeleteObjectCommand,
+} = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const fs = require('fs');
 
@@ -46,8 +52,25 @@ function createS3Client() {
 }
 
 /**
+ * Strip leading bucket name from path-style S3/R2 URLs / keys.
+ * e.g. "nouracademy-recordings/recordings/x.mp4" → "recordings/x.mp4"
+ */
+function stripBucketPrefix(key) {
+  if (!key) return key;
+  const cfg = getObjectStorageConfig();
+  const bucket = (cfg.bucket || '').replace(/^\/+|\/+$/g, '');
+  if (!bucket) return key;
+  if (key === bucket) return '';
+  if (key.startsWith(`${bucket}/`)) {
+    return key.slice(bucket.length + 1);
+  }
+  return key;
+}
+
+/**
  * Normalize LiveKit / S3 locations to a storage object key.
  * Accepts: "recordings/x.mp4", "s3://bucket/key", or https URLs ending with the key.
+ * Path-style R2 URLs include `/bucket/key` — the bucket segment is stripped.
  */
 function normalizeStorageKey(locationOrKey) {
   if (!locationOrKey || typeof locationOrKey !== 'string') return null;
@@ -60,24 +83,51 @@ function normalizeStorageKey(locationOrKey) {
     const withoutScheme = raw.slice('s3://'.length);
     const slash = withoutScheme.indexOf('/');
     if (slash === -1) return null;
-    return withoutScheme.slice(slash + 1);
+    return stripBucketPrefix(withoutScheme.slice(slash + 1));
   }
 
   const cfg = getObjectStorageConfig();
   if (cfg.publicBaseUrl && raw.startsWith(cfg.publicBaseUrl + '/')) {
-    return raw.slice(cfg.publicBaseUrl.length + 1);
+    return stripBucketPrefix(raw.slice(cfg.publicBaseUrl.length + 1));
   }
 
   try {
     if (raw.startsWith('http://') || raw.startsWith('https://')) {
       const u = new URL(raw);
-      return u.pathname.replace(/^\//, '');
+      let path = u.pathname.replace(/^\//, '');
+      // Virtual-hosted–style: bucket.account.r2.cloudflarestorage.com/key
+      // Path-style: account.r2.cloudflarestorage.com/bucket/key
+      path = stripBucketPrefix(path);
+      return path || null;
     }
   } catch {
     /* ignore */
   }
 
-  return raw.replace(/^\//, '');
+  return stripBucketPrefix(raw.replace(/^\//, '')) || null;
+}
+
+async function objectExists(storageUrl) {
+  const key = normalizeStorageKey(storageUrl);
+  if (!key || !isObjectStorageConfigured()) return false;
+  const cfg = getObjectStorageConfig();
+  const client = createS3Client();
+  try {
+    await client.send(
+      new HeadObjectCommand({
+        Bucket: cfg.bucket,
+        Key: key,
+      })
+    );
+    return true;
+  } catch (err) {
+    const code = err?.name || err?.Code || err?.$metadata?.httpStatusCode;
+    if (code === 'NotFound' || code === 'NoSuchKey' || code === 404) return false;
+    // AccessDenied etc. — treat as unknown/exists to avoid blocking playback
+    if (err?.$metadata?.httpStatusCode === 404) return false;
+    console.warn('objectExists:', err.message || err);
+    return false;
+  }
 }
 
 async function buildObjectPresignedUrl(storageUrl, expiresIn = DEFAULT_PRESIGN_TTL) {
@@ -91,6 +141,7 @@ async function buildObjectPresignedUrl(storageUrl, expiresIn = DEFAULT_PRESIGN_T
       url: `${cfg.publicBaseUrl}/${key}`,
       expiresAt: null,
       external: true,
+      key,
     };
   }
 
@@ -104,6 +155,7 @@ async function buildObjectPresignedUrl(storageUrl, expiresIn = DEFAULT_PRESIGN_T
     url,
     expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
     external: false,
+    key,
   };
 }
 
@@ -151,6 +203,8 @@ module.exports = {
   isObjectStorageConfigured,
   isLocalUploadPath,
   normalizeStorageKey,
+  stripBucketPrefix,
+  objectExists,
   buildObjectPresignedUrl,
   uploadLocalFileToObjectStorage,
   deleteObjectFromStorage,
