@@ -1,8 +1,129 @@
 const User = require('../models/User');
 const Course = require('../models/Course');
-const { sendPaymentStatusUpdate } = require('../utils/emailService');
+const {
+  sendPaymentStatusUpdate,
+  sendUserInvitation,
+  generateTempPassword,
+} = require('../utils/emailService');
 const { enrollStudentFromAssignedClassGroup } = require('../utils/courseEnrollment');
 const { writeAuditLog } = require('../utils/auditLog');
+
+// @desc    Créer un utilisateur (étudiant / professeur / admin)
+// @route   POST /api/users
+// @access  Admin (super, full)
+const createUser = async (req, res) => {
+  try {
+    const {
+      firstName,
+      lastName,
+      email,
+      role = 'student',
+      adminLevel,
+      password,
+      language = 'fr',
+      sendInviteEmail = true,
+      markStudentPaid = false,
+    } = req.body || {};
+
+    if (!firstName || !lastName || !email) {
+      return res.status(400).json({
+        error: 'ValidationError',
+        message: 'Prénom, nom et email sont requis',
+      });
+    }
+
+    if (!['student', 'professor', 'admin'].includes(role)) {
+      return res.status(400).json({
+        error: 'ValidationError',
+        message: 'Rôle invalide (student, professor, admin)',
+      });
+    }
+
+    if (role === 'admin' && !adminLevel) {
+      return res.status(400).json({
+        error: 'ValidationError',
+        message: 'Le niveau admin est requis pour un compte admin',
+      });
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const existing = await User.findByEmail(normalizedEmail);
+    if (existing) {
+      return res.status(400).json({
+        error: 'Conflict',
+        message: 'Un utilisateur avec cet email existe déjà',
+      });
+    }
+
+    const tempPassword =
+      typeof password === 'string' && password.trim().length >= 6
+        ? password.trim()
+        : generateTempPassword();
+
+    let status = 'verified';
+    if (role === 'student') {
+      status = markStudentPaid ? 'reglo' : 'verified';
+    } else if (role === 'professor') {
+      status = 'verified';
+    } else if (role === 'admin') {
+      status = 'reglo';
+    }
+
+    const user = new User({
+      firstName: String(firstName).trim(),
+      lastName: String(lastName).trim(),
+      email: normalizedEmail,
+      password: tempPassword,
+      role,
+      adminLevel: role === 'admin' ? adminLevel : null,
+      status,
+      emailVerified: true,
+      mustChangePassword: true,
+      paymentStatus: role === 'student' && markStudentPaid ? 'PAYMENT_APPROVED' : undefined,
+    });
+    await user.save();
+
+    let emailSent = false;
+    if (sendInviteEmail) {
+      try {
+        await sendUserInvitation(user, tempPassword, language);
+        emailSent = true;
+      } catch (emailErr) {
+        console.warn('createUser invitation email failed:', emailErr.message || emailErr);
+      }
+    }
+
+    await writeAuditLog(req, {
+      action: 'user.create',
+      targetType: 'User',
+      targetId: user._id,
+      details: { role, emailSent, status },
+    });
+
+    res.status(201).json({
+      message: emailSent
+        ? 'Utilisateur créé et invitation envoyée'
+        : 'Utilisateur créé (email non envoyé — communiquez le mot de passe manuellement)',
+      user: {
+        _id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: user.role,
+        status: user.status,
+      },
+      temporaryPassword: tempPassword,
+      emailSent,
+      mustChangePassword: true,
+    });
+  } catch (error) {
+    console.error('createUser:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: error.message || 'Impossible de créer l’utilisateur',
+    });
+  }
+};
 
 // @desc    Récupérer tous les utilisateurs (avec filtres)
 // @route   GET /api/users
@@ -448,6 +569,7 @@ const updateMyProfile = async (req, res) => {
 
 module.exports = {
   getAllUsers,
+  createUser,
   getUserById,
   updateUser,
   deleteUser,

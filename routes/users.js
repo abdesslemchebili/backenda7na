@@ -8,6 +8,7 @@ const {
 } = require('../middleware/auth');
 const {
   getAllUsers,
+  createUser,
   getUserById,
   updateUser,
   deleteUser,
@@ -26,6 +27,7 @@ router.get('/me/attendance', authenticateToken, attendanceController.getByStuden
 
 // Routes admin seulement
 router.get('/', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full', 'support'), getAllUsers);
+router.post('/', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full'), createUser);
 router.get('/stats/overview', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full', 'support'), getUserStats);
 router.delete('/:id', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full'), deleteUser);
 router.patch('/:id/status', authenticateToken, authorizeRoles('admin'), authorizeAdminLevels('super', 'full', 'support'), updateUserStatus);

@@ -209,22 +209,32 @@ const inviteUser = async (req, res) => {
     user.emailVerificationToken = generateVerificationToken(user._id);
     await user.save();
 
-    // Envoyer l'email d'invitation
+    // Email best-effort — ne bloque plus la création si SMTP échoue
+    let emailSent = false;
     try {
       await sendUserInvitation(user, tempPassword, language);
+      emailSent = true;
     } catch (emailError) {
       console.error('Erreur lors de l\'envoi de l\'email:', emailError);
-      // Supprimer l'utilisateur si l'email n'a pas pu être envoyé
-      await User.findByIdAndDelete(user._id);
-      return res.status(500).json({
-        error: 'Erreur d\'envoi d\'email',
-        message: 'L\'utilisateur n\'a pas pu être invité en raison d\'une erreur d\'envoi d\'email'
-      });
     }
 
+    // Compte utilisable même sans email (admin peut transmettre le mot de passe)
+    user.emailVerified = true;
+    user.mustChangePassword = true;
+    if (role === 'professor' || role === 'admin') {
+      user.status = role === 'admin' ? 'reglo' : 'verified';
+    } else if (user.status === 'invited') {
+      user.status = 'verified';
+    }
+    await user.save();
+
     res.status(201).json({
-      message: 'Invitation sent successfully',
-      user: { _id: user._id, email: user.email, role: user.role }
+      message: emailSent
+        ? 'Invitation sent successfully'
+        : 'User created; email could not be sent — share the temporary password manually',
+      user: { _id: user._id, email: user.email, role: user.role, status: user.status },
+      temporaryPassword: tempPassword,
+      emailSent,
     });
 
   } catch (error) {
