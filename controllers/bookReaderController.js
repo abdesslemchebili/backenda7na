@@ -5,6 +5,7 @@ const BookBookmark = require('../models/BookBookmark');
 const BookReadingProgress = require('../models/BookReadingProgress');
 const BookPageMetadata = require('../models/BookPageMetadata');
 const ClassGroup = require('../models/ClassGroup');
+const Material = require('../models/Material');
 const { formatBook, pickLocalizedTitle } = require('./bookController');
 const { formatChapter } = require('./chapterController');
 const {
@@ -59,6 +60,22 @@ function formatProgress(doc, bookPageCount = 0) {
   };
 }
 
+function formatHotspot(hotspot) {
+  if (!hotspot) return null;
+  const o = hotspot.toObject ? hotspot.toObject() : hotspot;
+  const mat = o.material;
+  const materialId = mat?._id ? mat._id.toString() : mat?.toString?.() || null;
+  return {
+    _id: o._id,
+    type: o.type || 'audio',
+    x: o.x,
+    y: o.y,
+    label: o.label || '',
+    materialId,
+    materialTitle: mat?.title ? pickLocalizedTitle(mat.title) : o.label || 'Audio',
+  };
+}
+
 function formatPageMetadata(doc, { includeTeacherNotes = false, classGroupId = null } = {}) {
   if (!doc) return null;
   const o = doc.toObject ? doc.toObject() : doc;
@@ -87,6 +104,7 @@ function formatPageMetadata(doc, { includeTeacherNotes = false, classGroupId = n
     exerciseReferences: o.exerciseReferences || [],
     gameReferences: o.gameReferences || [],
     videoReferences: o.videoReferences || [],
+    hotspots: Array.isArray(o.hotspots) ? o.hotspots.map(formatHotspot).filter(Boolean) : [],
     teacherNotes,
   };
 }
@@ -197,11 +215,18 @@ const getBookReader = async (req, res) => {
     const chapterFilters = { book: book._id };
     if (req.user.role !== 'admin') chapterFilters.status = 'published';
 
-    const [chapters, progress, bookmarks, pageMetadata] = await Promise.all([
+    const [chapters, progress, bookmarks, pageMetadata, audios] = await Promise.all([
       Chapter.find(chapterFilters).sort({ order: 1 }).lean(),
       BookReadingProgress.findOne({ user: req.user._id, book: book._id }).lean(),
       BookBookmark.find({ user: req.user._id, book: book._id }).sort({ pageNumber: 1 }).lean(),
-      BookPageMetadata.find({ book: book._id }).sort({ pageNumber: 1 }).lean(),
+      BookPageMetadata.find({ book: book._id })
+        .populate('hotspots.material', 'title type active')
+        .sort({ pageNumber: 1 })
+        .lean(),
+      Material.find({ book: book._id, type: 'audio', active: true })
+        .select('title type chapter order duration')
+        .sort({ order: 1, createdAt: 1 })
+        .lean(),
     ]);
 
     const formattedBook = formatBook(book);
@@ -232,6 +257,13 @@ const getBookReader = async (req, res) => {
           classGroupId,
         })
       ),
+      audios: audios.map((m) => ({
+        _id: m._id,
+        displayTitle: pickLocalizedTitle(m.title),
+        chapter: m.chapter,
+        order: m.order || 0,
+        duration: m.duration,
+      })),
       access: {
         canRead: true,
         canManage:
@@ -462,7 +494,10 @@ const listPageMetadata = async (req, res) => {
     const pageNumber = parsePageNumber(req.query.page);
     const filter = { book: book._id };
     if (pageNumber) filter.pageNumber = pageNumber;
-    const rows = await BookPageMetadata.find(filter).sort({ pageNumber: 1 }).lean();
+    const rows = await BookPageMetadata.find(filter)
+      .populate('hotspots.material', 'title type active')
+      .sort({ pageNumber: 1 })
+      .lean();
     const classGroupId = req.query.classGroupId || null;
     res.json({
       data: rows.map((row) =>
@@ -567,6 +602,137 @@ const deletePageMetadata = async (req, res) => {
   }
 };
 
+function clampPercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(100, Math.max(0, n));
+}
+
+async function respondFormattedMetadata(res, doc, status = 200) {
+  const populated = await BookPageMetadata.findById(doc._id)
+    .populate('hotspots.material', 'title type active')
+    .lean();
+  res.status(status).json(formatPageMetadata(populated, { includeTeacherNotes: true }));
+}
+
+// POST /api/books/:id/page-metadata/:pageNumber/hotspots
+const addPageHotspot = async (req, res) => {
+  try {
+    const book = await loadBookOr404(req, res);
+    if (!book) return;
+    const pageNumber = parsePageNumber(req.params.pageNumber);
+    if (!pageNumber) {
+      return res.status(400).json({ error: 'ValidationError', message: 'Invalid pageNumber' });
+    }
+    const x = clampPercent(req.body.x);
+    const y = clampPercent(req.body.y);
+    const materialId = req.body.materialId || req.body.material;
+    if (x == null || y == null || !materialId) {
+      return res.status(400).json({
+        error: 'ValidationError',
+        message: 'x, y and materialId are required',
+      });
+    }
+    const material = await Material.findById(materialId).select('type book chapter active title');
+    if (!material || material.type !== 'audio' || material.active === false) {
+      return res.status(400).json({ error: 'ValidationError', message: 'Audio material not found' });
+    }
+    if (material.book && material.book.toString() !== book._id.toString()) {
+      return res.status(400).json({ error: 'ValidationError', message: 'Audio does not belong to this book' });
+    }
+
+    const hotspot = {
+      type: 'audio',
+      x,
+      y,
+      material: material._id,
+      label: req.body.label ? String(req.body.label).trim().slice(0, 200) : pickLocalizedTitle(material.title),
+    };
+
+    const doc = await BookPageMetadata.findOneAndUpdate(
+      { book: book._id, pageNumber },
+      {
+        $push: { hotspots: hotspot },
+        $addToSet: { audioReferences: material._id },
+        $setOnInsert: {
+          book: book._id,
+          pageNumber,
+          chapter: material.chapter || null,
+        },
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    await respondFormattedMetadata(res, doc, 201);
+  } catch (err) {
+    console.error('addPageHotspot:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+};
+
+// PATCH /api/books/:id/page-metadata/:pageNumber/hotspots/:hotspotId
+const updatePageHotspot = async (req, res) => {
+  try {
+    const book = await loadBookOr404(req, res);
+    if (!book) return;
+    const pageNumber = parsePageNumber(req.params.pageNumber);
+    const { hotspotId } = req.params;
+    if (!pageNumber || !hotspotId) {
+      return res.status(400).json({ error: 'ValidationError', message: 'Invalid ids' });
+    }
+    const doc = await BookPageMetadata.findOne({ book: book._id, pageNumber });
+    if (!doc) {
+      return res.status(404).json({ error: 'NotFound', message: 'Page metadata not found' });
+    }
+    const hotspot = doc.hotspots.id(hotspotId);
+    if (!hotspot) {
+      return res.status(404).json({ error: 'NotFound', message: 'Hotspot not found' });
+    }
+    if (req.body.x != null) {
+      const x = clampPercent(req.body.x);
+      if (x != null) hotspot.x = x;
+    }
+    if (req.body.y != null) {
+      const y = clampPercent(req.body.y);
+      if (y != null) hotspot.y = y;
+    }
+    if (req.body.label !== undefined) hotspot.label = String(req.body.label || '').trim().slice(0, 200);
+    if (req.body.materialId) hotspot.material = req.body.materialId;
+    await doc.save();
+    await respondFormattedMetadata(res, doc);
+  } catch (err) {
+    console.error('updatePageHotspot:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+};
+
+// DELETE /api/books/:id/page-metadata/:pageNumber/hotspots/:hotspotId
+const deletePageHotspot = async (req, res) => {
+  try {
+    const book = await loadBookOr404(req, res);
+    if (!book) return;
+    const pageNumber = parsePageNumber(req.params.pageNumber);
+    const { hotspotId } = req.params;
+    if (!pageNumber || !hotspotId) {
+      return res.status(400).json({ error: 'ValidationError', message: 'Invalid ids' });
+    }
+    const doc = await BookPageMetadata.findOne({ book: book._id, pageNumber });
+    if (!doc) {
+      return res.status(404).json({ error: 'NotFound', message: 'Page metadata not found' });
+    }
+    const hotspot = doc.hotspots.id(hotspotId);
+    if (!hotspot) {
+      return res.status(404).json({ error: 'NotFound', message: 'Hotspot not found' });
+    }
+    hotspot.deleteOne();
+    await doc.save();
+    await respondFormattedMetadata(res, doc);
+  } catch (err) {
+    console.error('deletePageHotspot:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+};
+
 module.exports = {
   getBookReader,
   streamBookPdf,
@@ -578,4 +744,7 @@ module.exports = {
   listPageMetadata,
   upsertPageMetadata,
   deletePageMetadata,
+  addPageHotspot,
+  updatePageHotspot,
+  deletePageHotspot,
 };

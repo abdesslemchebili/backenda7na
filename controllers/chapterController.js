@@ -3,6 +3,41 @@ const Book = require('../models/Book');
 const Material = require('../models/Material');
 const { pickLocalizedTitle } = require('./bookController');
 
+function formatSection(section) {
+  if (!section) return null;
+  const o = section.toObject ? section.toObject() : section;
+  return {
+    _id: o._id,
+    title: o.title,
+    displayTitle: pickLocalizedTitle(o.title),
+    order: o.order,
+    pageStart: o.pageStart,
+    pageEnd: o.pageEnd,
+  };
+}
+
+function parseSections(value) {
+  if (!Array.isArray(value)) return null;
+  return value
+    .map((item, index) => {
+      const titleObj =
+        typeof item.title === 'string'
+          ? { fr: item.title.trim(), en: item.title.trim(), ar: '' }
+          : item.title;
+      if (!titleObj?.fr && !titleObj?.en) return null;
+      const parsed = {
+        title: titleObj,
+        order: Number(item.order) > 0 ? Number(item.order) : index + 1,
+        pageStart: item.pageStart != null && item.pageStart !== '' ? Number(item.pageStart) : null,
+        pageEnd: item.pageEnd != null && item.pageEnd !== '' ? Number(item.pageEnd) : null,
+      };
+      if (item._id) parsed._id = item._id;
+      return parsed;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.order - b.order);
+}
+
 function formatChapter(doc) {
   if (!doc) return null;
   const o = doc.toObject ? doc.toObject() : doc;
@@ -19,6 +54,7 @@ function formatChapter(doc) {
     description: o.description,
     pageStart: o.pageStart,
     pageEnd: o.pageEnd,
+    sections: Array.isArray(o.sections) ? o.sections.map(formatSection).filter(Boolean) : [],
     status: o.status,
     createdAt: o.createdAt,
     updatedAt: o.updatedAt,
@@ -69,7 +105,7 @@ const createChapter = async (req, res) => {
       return res.status(404).json({ error: 'NotFound', message: 'Book not found' });
     }
 
-    const { title, order, description, pageStart, pageEnd, status } = req.body;
+    const { title, order, description, pageStart, pageEnd, status, sections } = req.body;
     if (!order) {
       return res.status(400).json({ error: 'ValidationError', message: 'order is required' });
     }
@@ -94,6 +130,7 @@ const createChapter = async (req, res) => {
       description: description || undefined,
       pageStart: pageStart != null ? Number(pageStart) : null,
       pageEnd: pageEnd != null ? Number(pageEnd) : null,
+      sections: parseSections(sections) || [],
       status: ['draft', 'published', 'archived'].includes(status) ? status : 'draft',
     });
 
@@ -130,7 +167,7 @@ const updateChapter = async (req, res) => {
       return res.status(404).json({ error: 'NotFound', message: 'Chapter not found' });
     }
 
-    const { title, order, description, pageStart, pageEnd, status } = req.body;
+    const { title, order, description, pageStart, pageEnd, status, sections } = req.body;
     if (title !== undefined) {
       chapter.title = typeof title === 'string' ? { fr: title, en: title, ar: chapter.title?.ar || '' } : title;
     }
@@ -151,6 +188,8 @@ const updateChapter = async (req, res) => {
     if (status !== undefined && ['draft', 'published', 'archived'].includes(status)) {
       chapter.status = status;
     }
+    const parsedSections = parseSections(sections);
+    if (parsedSections) chapter.sections = parsedSections;
 
     await chapter.save();
     const populated = await Chapter.findById(chapter._id).populate('book', 'title').lean();

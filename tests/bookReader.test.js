@@ -149,6 +149,50 @@ describe('Interactive book reader', () => {
     expect(list.body.data).toHaveLength(1);
   });
 
+  it('stores chapter sections and clickable audio hotspots', async () => {
+    const lang = await seedLanguage();
+    const book = await seedBook(lang._id);
+    const admin = await createUser({
+      role: 'admin',
+      adminLevel: 'content',
+      status: 'verified',
+    });
+    const Chapter = require('../models/Chapter');
+    const Material = require('../models/Material');
+    await Chapter.create({
+      book: book._id,
+      title: { fr: 'Kapitel 4', en: 'Kapitel 4', ar: '' },
+      order: 1,
+      pageStart: 55,
+      pageEnd: 68,
+      status: 'published',
+      sections: [
+        { title: { fr: 'Hören', en: 'Listening', ar: '' }, order: 1, pageStart: 57, pageEnd: 58 },
+      ],
+    });
+    const audio = await Material.create({
+      type: 'audio',
+      title: { fr: 'Track 4.2', en: 'Track 4.2', ar: '' },
+      book: book._id,
+      active: true,
+    });
+
+    const chapters = await request(app)
+      .get(`/api/books/${book._id}/chapters`)
+      .set(bearer(admin));
+    expect(chapters.body.data[0].sections).toHaveLength(1);
+    expect(chapters.body.data[0].sections[0].displayTitle).toBe('Hören');
+
+    const hotspot = await request(app)
+      .post(`/api/books/${book._id}/page-metadata/57/hotspots`)
+      .set(bearer(admin))
+      .send({ x: 22.5, y: 41, materialId: audio._id, label: 'Track 4.2' });
+    expect(hotspot.status).toBe(201);
+    expect(hotspot.body.hotspots).toHaveLength(1);
+    expect(hotspot.body.hotspots[0].x).toBe(22.5);
+    expect(hotspot.body.hotspots[0].materialTitle).toBe('Track 4.2');
+  });
+
   it('returns 404 for stream when PDF file is missing on disk', async () => {
     const lang = await seedLanguage();
     const professor = await createUser({ role: 'professor', status: 'verified' });

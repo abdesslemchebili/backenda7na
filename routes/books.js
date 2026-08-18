@@ -36,6 +36,21 @@ router.put('/:id/progress', ...bookContent, readerCtrl.upsertReadingProgress);
 router.get('/:id/page-metadata', ...bookContent, readerCtrl.listPageMetadata);
 router.put('/:id/page-metadata/:pageNumber', ...contentAdmin, readerCtrl.upsertPageMetadata);
 router.delete('/:id/page-metadata/:pageNumber', ...contentAdmin, readerCtrl.deletePageMetadata);
+router.post(
+  '/:id/page-metadata/:pageNumber/hotspots',
+  ...contentAdmin,
+  readerCtrl.addPageHotspot
+);
+router.patch(
+  '/:id/page-metadata/:pageNumber/hotspots/:hotspotId',
+  ...contentAdmin,
+  readerCtrl.updatePageHotspot
+);
+router.delete(
+  '/:id/page-metadata/:pageNumber/hotspots/:hotspotId',
+  ...contentAdmin,
+  readerCtrl.deletePageHotspot
+);
 
 router.get('/:id', optionalAuth, bookCtrl.getBook);
 router.post('/', ...contentAdmin, bookCtrl.createBook);

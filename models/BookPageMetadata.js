@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 /**
  * Sparse educational metadata for a PDF page.
  * Do NOT create a row per PDF page — only when content is attached
- * (vocabulary, audio, exercises, games, teacher notes).
+ * (vocabulary, audio, exercises, games, teacher notes, hotspots).
  *
  * References existing Material / Exercise / LearningGame documents
  * rather than duplicating their payloads.
@@ -15,6 +15,27 @@ const vocabularyItemSchema = new mongoose.Schema(
     audioUrl: { type: String, trim: true, default: '' },
   },
   { _id: false }
+);
+
+const hotspotSchema = new mongoose.Schema(
+  {
+    type: {
+      type: String,
+      enum: ['audio', 'exercise', 'game', 'video'],
+      default: 'audio',
+    },
+    /** Percent of page width (0–100), from the left. */
+    x: { type: Number, required: true, min: 0, max: 100 },
+    /** Percent of page height (0–100), from the top. */
+    y: { type: Number, required: true, min: 0, max: 100 },
+    material: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Material',
+      default: null,
+    },
+    label: { type: String, trim: true, maxlength: 200, default: '' },
+  },
+  { _id: true }
 );
 
 const teacherNoteSchema = new mongoose.Schema(
@@ -67,6 +88,8 @@ const bookPageMetadataSchema = new mongoose.Schema(
         url: { type: String, trim: true, maxlength: 2000, default: '' },
       },
     ],
+    /** Clickable speaker / activity markers placed on the PDF page. */
+    hotspots: { type: [hotspotSchema], default: [] },
     teacherNotes: { type: [teacherNoteSchema], default: [] },
   },
   { timestamps: true }
