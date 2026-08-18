@@ -107,6 +107,41 @@ const closeMonth = async (req, res) => {
   }
 };
 
+// GET /api/teacher-earnings/:professorId — admin
+const getProfessorEarnings = async (req, res) => {
+  try {
+    const professor = await User.findById(req.params.professorId).select(
+      'firstName lastName email role professorInfo.hourlyRate',
+    );
+    if (!professor || professor.role !== 'professor') {
+      return res.status(404).json({ message: 'Professor not found' });
+    }
+
+    const month = req.query.month || currentMonth();
+    const earning = await getOrCreateMonthlyEarning(professor._id, month);
+    const history = await TeacherEarning.find({ professorId: professor._id })
+      .sort({ month: -1 })
+      .limit(24)
+      .lean();
+    const totalEarnings = history.reduce((sum, e) => sum + (e.balance || 0), 0);
+
+    res.json({
+      professor: {
+        _id: professor._id,
+        firstName: professor.firstName,
+        lastName: professor.lastName,
+        email: professor.email,
+        hourlyRate: professor.professorInfo?.hourlyRate || 0,
+      },
+      current: earning,
+      history,
+      totalEarnings,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
 // GET /api/teacher-earnings — admin list all
 const listAllEarnings = async (req, res) => {
   try {
@@ -126,6 +161,7 @@ const listAllEarnings = async (req, res) => {
 
 module.exports = {
   getMyEarnings,
+  getProfessorEarnings,
   addSessionHours,
   setHourlyRate,
   closeMonth,
