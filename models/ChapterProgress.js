@@ -9,9 +9,9 @@ const chapterProgressSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
-    course: {
+    classGroup: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Course',
+      ref: 'ClassGroup',
       required: true,
     },
     book: {
@@ -38,9 +38,9 @@ const chapterProgressSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-chapterProgressSchema.index({ student: 1, course: 1, chapter: 1 }, { unique: true });
-chapterProgressSchema.index({ course: 1, student: 1 });
-chapterProgressSchema.index({ course: 1, status: 1 });
+chapterProgressSchema.index({ student: 1, classGroup: 1, chapter: 1 }, { unique: true });
+chapterProgressSchema.index({ classGroup: 1, student: 1 });
+chapterProgressSchema.index({ classGroup: 1, status: 1 });
 
 module.exports = mongoose.model('ChapterProgress', chapterProgressSchema);
 module.exports.CHAPTER_PROGRESS_STATUSES = CHAPTER_PROGRESS_STATUSES;

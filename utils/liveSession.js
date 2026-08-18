@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const Course = require('../models/Course');
+const ClassGroup = require('../models/ClassGroup');
 
 const JOIN_BUFFER_MS = 15 * 60 * 1000;
 const JOIN_GRACE_AFTER_MS = 30 * 60 * 1000;
@@ -7,12 +7,14 @@ const JOIN_GRACE_AFTER_MS = 30 * 60 * 1000;
 function generateLiveMeetingCredentials() {
   return {
     meetingId: `na-${crypto.randomBytes(12).toString('hex')}`,
-    meetingPassword: crypto.randomBytes(4).toString('hex')
+    meetingPassword: crypto.randomBytes(4).toString('hex'),
   };
 }
 
 function getSessionWindow(classItem) {
-  const start = classItem.schedule?.startTime ? new Date(classItem.schedule.startTime).getTime() : null;
+  const start = classItem.schedule?.startTime
+    ? new Date(classItem.schedule.startTime).getTime()
+    : null;
   const end = classItem.schedule?.endTime
     ? new Date(classItem.schedule.endTime).getTime()
     : start
@@ -49,24 +51,18 @@ function canHostStartSession(classItem, now = Date.now()) {
   return now >= windowStart && now <= windowEnd;
 }
 
-async function isStudentEnrolledInClassCourse(studentId, classItem) {
-  const course = await Course.findById(classItem.course).select('enrolledStudents');
-  if (course?.enrolledStudents.some(
-    (e) => e.student && e.student.toString() === studentId.toString()
-  )) {
-    return true;
-  }
-
-  if ((classItem.enrolledStudents || []).some(
-    (e) => e.student && e.student.toString() === studentId.toString()
-  )) {
+async function isStudentInClassGroup(studentId, classItem) {
+  if (
+    (classItem.enrolledStudents || []).some(
+      (e) => e.student && e.student.toString() === studentId.toString()
+    )
+  ) {
     return true;
   }
 
   if (classItem.classGroupId) {
-    const ClassGroup = require('../models/ClassGroup');
     const group = await ClassGroup.findById(classItem.classGroupId).select('studentIds');
-    if (group?.studentIds.some((id) => id.toString() === studentId.toString())) {
+    if (group?.studentIds?.some((id) => id.toString() === studentId.toString())) {
       return true;
     }
   }
@@ -83,11 +79,15 @@ async function isStudentEnrolledInClassCourse(studentId, classItem) {
   return false;
 }
 
+/** @deprecated alias */
+const isStudentEnrolledInClassCourse = isStudentInClassGroup;
+
 async function canProfessorHostClass(user, classItem) {
   if (user.role === 'admin') return true;
   if (classItem.professor && classItem.professor.toString() === user._id.toString()) return true;
-  const course = await Course.findById(classItem.course).select('professor');
-  return !!(course && course.professor.toString() === user._id.toString());
+  if (!classItem.classGroupId) return false;
+  const group = await ClassGroup.findById(classItem.classGroupId).select('professorId');
+  return !!(group && group.professorId?.toString() === user._id.toString());
 }
 
 async function assertLiveJoinAccess(req, classItem) {
@@ -102,11 +102,15 @@ async function assertLiveJoinAccess(req, classItem) {
 
   if (req.user.role === 'student') {
     if (req.user.status !== 'reglo') {
-      return { ok: false, status: 403, message: 'Payment must be confirmed to join live sessions' };
+      return {
+        ok: false,
+        status: 403,
+        message: 'Payment must be confirmed to join live sessions',
+      };
     }
-    const enrolled = await isStudentEnrolledInClassCourse(req.user._id, classItem);
+    const enrolled = await isStudentInClassGroup(req.user._id, classItem);
     if (!enrolled) {
-      return { ok: false, status: 403, message: 'Not enrolled in this course' };
+      return { ok: false, status: 403, message: 'Not enrolled in this class group' };
     }
   } else if (!isHost && req.user.role !== 'admin') {
     return { ok: false, status: 403, message: 'Not authorized to join this session' };
@@ -114,10 +118,18 @@ async function assertLiveJoinAccess(req, classItem) {
 
   if (isHost) {
     if (!canHostStartSession(classItem)) {
-      return { ok: false, status: 403, message: 'Session is outside the allowed hosting window' };
+      return {
+        ok: false,
+        status: 403,
+        message: 'Session is outside the allowed hosting window',
+      };
     }
   } else if (!isWithinJoinWindow(classItem)) {
-    return { ok: false, status: 403, message: 'Session is not open for joining yet or has ended' };
+    return {
+      ok: false,
+      status: 403,
+      message: 'Session is not open for joining yet or has ended',
+    };
   }
 
   if (classItem.status === 'completed' && !isWithinJoinWindow(classItem)) {
@@ -131,7 +143,7 @@ function ensureLiveConfigCredentials(classItem) {
   const creds = generateLiveMeetingCredentials();
   return {
     meetingId: classItem.liveConfig?.meetingId || creds.meetingId,
-    meetingPassword: classItem.liveConfig?.meetingPassword || creds.meetingPassword
+    meetingPassword: classItem.liveConfig?.meetingPassword || creds.meetingPassword,
   };
 }
 
@@ -152,6 +164,8 @@ module.exports = {
   canHostStartSession,
   assertLiveJoinAccess,
   canProfessorHostClass,
+  isStudentInClassGroup,
+  isStudentEnrolledInClassCourse,
   ensureLiveConfigCredentials,
-  sanitizeClassLiveConfig
+  sanitizeClassLiveConfig,
 };

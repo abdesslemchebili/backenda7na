@@ -1,63 +1,98 @@
-const Course = require('../models/Course');
 const Class = require('../models/Class');
 const ClassGroup = require('../models/ClassGroup');
 const Document = require('../models/Document');
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
-const { getStudentVisibleClassFilter, syncStudentCohortSessions, fetchStudentScheduleSessions } = require('../utils/studentClassVisibility');
+const Enrollment = require('../models/Enrollment');
+const {
+  getStudentVisibleClassFilter,
+  syncStudentCohortSessions,
+  fetchStudentScheduleSessions,
+} = require('../utils/studentClassVisibility');
 
 // GET /api/dashboard/student
 const getStudentDashboard = async (req, res) => {
   try {
     const userId = req.user._id;
-    const courses = await Course.find({ 'enrolledStudents.student': userId }).populate('professor', 'firstName lastName').lean();
-    const enrolledCount = courses.length;
-    let learningTimeHours = 0;
-    let totalProgress = 0;
-    const enrolledCoursesWithProgress = courses.map(c => {
-      const en = (c.enrolledStudents || []).find(e => e.student && e.student.toString() === userId.toString());
-      const progress = en ? (en.progress || 0) : 0;
-      totalProgress += progress;
-      return { course: { _id: c._id, title: c.title }, progress };
-    });
-    const averageProgress = enrolledCount ? Math.round(totalProgress / enrolledCount) : 0;
+    const groups = await ClassGroup.find({ studentIds: userId })
+      .populate('professorId', 'firstName lastName')
+      .lean();
+    const enrolledCount = groups.length;
 
-    // Rattrape les inscriptions session/cours pour les cohortes déjà assignées
+    const enrollments = await Enrollment.find({
+      student: userId,
+      status: { $in: ['active', 'completed'] },
+    })
+      .select('classGroup progress')
+      .lean();
+    const progressByGroup = new Map(
+      enrollments.map((e) => [e.classGroup.toString(), e.progress || 0])
+    );
+
+    let totalProgress = 0;
+    const enrolledGroupsWithProgress = groups.map((g) => {
+      const progress = progressByGroup.get(g._id.toString()) || 0;
+      totalProgress += progress;
+      return {
+        classGroupId: g._id,
+        classGroup: { _id: g._id, name: g.name },
+        progress,
+      };
+    });
+    const averageProgress = enrolledCount
+      ? Math.round(totalProgress / enrolledCount)
+      : 0;
+
     await syncStudentCohortSessions(userId);
 
-    const upcomingClasses = await fetchStudentScheduleSessions(userId, { limit: 20, days: 90 });
+    const upcomingClasses = await fetchStudentScheduleSessions(userId, {
+      limit: 20,
+      days: 90,
+    });
     const now = new Date();
-    const courseIds = courses.map((c) => c._id);
+    const groupIds = groups.map((g) => g._id);
     const visibility = await getStudentVisibleClassFilter(userId);
-    const visibleClassIds = (
-      await Class.find(visibility).select('_id').lean()
-    ).map((x) => x._id);
-    const recentDocuments = await Document.find({ course: { $in: courseIds } })
-      .sort({ createdAt: -1 }).limit(5).select('title course createdAt').lean();
+    const visibleClassIds = (await Class.find(visibility).select('_id').lean()).map(
+      (x) => x._id
+    );
+    const recentDocuments = await Document.find({ classGroup: { $in: groupIds } })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select('title classGroup createdAt')
+      .lean();
 
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const monthAttendance = await Attendance.find({
       student: userId,
-      createdAt: { $gte: startOfMonth }
+      createdAt: { $gte: startOfMonth },
     });
-    const sessionsAttended = monthAttendance.filter(a => a.status === 'present').length;
+    const sessionsAttended = monthAttendance.filter((a) => a.status === 'present').length;
     const sessionsTotal = await Class.countDocuments({
       _id: { $in: visibleClassIds },
       type: 'live',
       status: { $in: ['completed', 'ongoing'] },
       'schedule.startTime': { $gte: startOfMonth },
     });
-    const monthPercentage = sessionsTotal ? Math.round((sessionsAttended / sessionsTotal) * 100) : 0;
+    const monthPercentage = sessionsTotal
+      ? Math.round((sessionsAttended / sessionsTotal) * 100)
+      : 0;
 
     res.json({
+      enrolledGroupsCount: enrolledCount,
       enrolledCoursesCount: enrolledCount,
-      learningTimeHours,
+      learningTimeHours: 0,
       averageProgress,
       upcomingClassesCount: upcomingClasses.length,
       upcomingClasses,
-      recentDocuments: recentDocuments.map(d => ({ _id: d._id, title: d.title, courseId: d.course, createdAt: d.createdAt })),
+      recentDocuments: recentDocuments.map((d) => ({
+        _id: d._id,
+        title: d.title,
+        classGroupId: d.classGroup,
+        createdAt: d.createdAt,
+      })),
       attendanceSummary: { monthPercentage, sessionsAttended, sessionsTotal },
-      enrolledCoursesWithProgress
+      enrolledGroupsWithProgress,
+      enrolledCoursesWithProgress: enrolledGroupsWithProgress,
     });
   } catch (err) {
     console.error('getStudentDashboard:', err);
@@ -68,48 +103,84 @@ const getStudentDashboard = async (req, res) => {
 // GET /api/dashboard/professor
 const getProfessorDashboard = async (req, res) => {
   try {
-    const courses = await Course.find({ professor: req.user._id }).lean();
-    const activeCoursesCount = courses.filter(c => c.status === 'published').length;
+    const groups = await ClassGroup.find({ professorId: req.user._id }).lean();
+    const activeGroupsCount = groups.filter((g) => g.status === 'active').length;
     let totalStudentsCount = 0;
-    const courseStats = courses.map(c => {
-      const count = (c.enrolledStudents || []).length;
+    const groupStats = groups.map((g) => {
+      const count = (g.studentIds || []).length;
       totalStudentsCount += count;
-      return { courseId: c._id, title: c.title?.en || c.title?.fr || '', enrolledCount: count };
+      return {
+        classGroupId: g._id,
+        name: g.name || '',
+        enrolledCount: count,
+      };
     });
 
-    const courseIds = courses.map(c => c._id);
+    const groupIds = groups.map((g) => g._id);
     const now = new Date();
     const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const dayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const dayEnd = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      23,
+      59,
+      59,
+      999
+    );
     const todaysSessions = await Class.find({
-      course: { $in: courseIds },
+      classGroupId: { $in: groupIds },
       type: 'live',
-      'schedule.startTime': { $gte: dayStart, $lte: dayEnd }
-    }).populate('course', 'title').sort('schedule.startTime').lean();
+      'schedule.startTime': { $gte: dayStart, $lte: dayEnd },
+    })
+      .populate('classGroupId', 'name')
+      .sort('schedule.startTime')
+      .lean();
 
     const upcomingClasses = await Class.find({
-      course: { $in: courseIds },
+      classGroupId: { $in: groupIds },
       type: 'live',
       status: 'scheduled',
-      'schedule.startTime': { $gt: new Date() }
+      'schedule.startTime': { $gt: new Date() },
     }).limit(10);
 
     const startOfMonth = new Date();
     startOfMonth.setDate(1);
     startOfMonth.setHours(0, 0, 0, 0);
-    const classIds = (await Class.find({ course: { $in: courseIds } }).select('_id')).map(c => c._id);
-    const monthAttendance = await Attendance.countDocuments({ class: { $in: classIds }, status: 'present', createdAt: { $gte: startOfMonth } });
-    const monthTotal = await Attendance.countDocuments({ class: { $in: classIds }, createdAt: { $gte: startOfMonth } });
-    const monthPercentage = monthTotal ? Math.round((monthAttendance / monthTotal) * 100) : 0;
+    const classIds = (
+      await Class.find({ classGroupId: { $in: groupIds } }).select('_id')
+    ).map((c) => c._id);
+    const monthAttendance = await Attendance.countDocuments({
+      class: { $in: classIds },
+      status: 'present',
+      createdAt: { $gte: startOfMonth },
+    });
+    const monthTotal = await Attendance.countDocuments({
+      class: { $in: classIds },
+      createdAt: { $gte: startOfMonth },
+    });
+    const monthPercentage = monthTotal
+      ? Math.round((monthAttendance / monthTotal) * 100)
+      : 0;
 
     res.json({
-      activeCoursesCount,
+      activeGroupsCount,
+      activeCoursesCount: activeGroupsCount,
       totalStudentsCount,
       upcomingClassesCount: upcomingClasses.length,
-      todaysSessions: todaysSessions.map(s => ({ _id: s._id, title: s.title, schedule: s.schedule, courseId: s.course?._id })),
-      courseStats,
-      attendanceOverview: { monthPercentage, period: `${startOfMonth.getFullYear()}-${String(startOfMonth.getMonth() + 1).padStart(2, '0')}` },
-      averageRating: 0
+      todaysSessions: todaysSessions.map((s) => ({
+        _id: s._id,
+        title: s.title,
+        schedule: s.schedule,
+        classGroupId: s.classGroupId?._id || s.classGroupId,
+      })),
+      groupStats,
+      courseStats: groupStats,
+      attendanceOverview: {
+        monthPercentage,
+        period: `${startOfMonth.getFullYear()}-${String(startOfMonth.getMonth() + 1).padStart(2, '0')}`,
+      },
+      averageRating: 0,
     });
   } catch (err) {
     console.error('getProfessorDashboard:', err);
@@ -120,31 +191,63 @@ const getProfessorDashboard = async (req, res) => {
 // GET /api/dashboard/admin
 const getAdminDashboard = async (req, res) => {
   try {
-    const [userStats, courseStats, activeSessions] = await Promise.all([
+    const [userStats, groupStats, activeSessions] = await Promise.all([
       User.aggregate([
-        { $group: { _id: null, total: { $sum: 1 }, students: { $sum: { $cond: [{ $eq: ['$role', 'student'] }, 1, 0] } }, professors: { $sum: { $cond: [{ $eq: ['$role', 'professor'] }, 1, 0] } }, admins: { $sum: { $cond: [{ $eq: ['$role', 'admin'] }, 1, 0] } } } }
-      ]).then(r => r[0] || { total: 0, students: 0, professors: 0, admins: 0 }),
-      Course.aggregate([
-        { $group: { _id: null, total: { $sum: 1 }, published: { $sum: { $cond: [{ $eq: ['$status', 'published'] }, 1, 0] } }, draft: { $sum: { $cond: [{ $eq: ['$status', 'draft'] }, 1, 0] } }, totalEnrollments: { $sum: { $size: { $ifNull: ['$enrolledStudents', []] } } } } }
-      ]).then(r => r[0] || { total: 0, published: 0, draft: 0, totalEnrollments: 0 }),
-      Class.countDocuments({ type: 'live', status: 'ongoing' })
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            students: {
+              $sum: { $cond: [{ $eq: ['$role', 'student'] }, 1, 0] },
+            },
+            professors: {
+              $sum: { $cond: [{ $eq: ['$role', 'professor'] }, 1, 0] },
+            },
+            admins: { $sum: { $cond: [{ $eq: ['$role', 'admin'] }, 1, 0] } },
+          },
+        },
+      ]).then(
+        (r) => r[0] || { total: 0, students: 0, professors: 0, admins: 0 }
+      ),
+      ClassGroup.aggregate([
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            active: {
+              $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] },
+            },
+            archived: {
+              $sum: { $cond: [{ $eq: ['$status', 'archived'] }, 1, 0] },
+            },
+            totalEnrollments: {
+              $sum: { $size: { $ifNull: ['$studentIds', []] } },
+            },
+          },
+        },
+      ]).then(
+        (r) => r[0] || { total: 0, active: 0, archived: 0, totalEnrollments: 0 }
+      ),
+      Class.countDocuments({ type: 'live', status: 'ongoing' }),
     ]);
 
     const lastMonth = new Date();
     lastMonth.setMonth(lastMonth.getMonth() - 1);
     const lastMonthUsers = await User.countDocuments({ createdAt: { $lt: new Date() } });
     const prevCount = await User.countDocuments({ createdAt: { $lt: lastMonth } });
-    const enrollmentGrowthPercent = prevCount ? Math.round(((lastMonthUsers - prevCount) / prevCount) * 100) : 0;
+    const enrollmentGrowthPercent = prevCount
+      ? Math.round(((lastMonthUsers - prevCount) / prevCount) * 100)
+      : 0;
 
     const statusRows = await User.aggregate([
-      { $group: { _id: '$status', count: { $sum: 1 } } }
+      { $group: { _id: '$status', count: { $sum: 1 } } },
     ]);
     const byStatus = {
       invited: 0,
       pending: 0,
       verified: 0,
       reglo: 0,
-      suspended: 0
+      suspended: 0,
     };
     statusRows.forEach((row) => {
       if (row._id && Object.prototype.hasOwnProperty.call(byStatus, row._id)) {
@@ -154,7 +257,7 @@ const getAdminDashboard = async (req, res) => {
 
     const [presentOrLate, totalAttendance] = await Promise.all([
       Attendance.countDocuments({ status: { $in: ['present', 'late'] } }),
-      Attendance.countDocuments({})
+      Attendance.countDocuments({}),
     ]);
     const attendanceRatePercent = totalAttendance
       ? Math.round((presentOrLate / totalAttendance) * 100)
@@ -163,7 +266,8 @@ const getAdminDashboard = async (req, res) => {
     res.json({
       totalStudents: userStats.students,
       totalProfessors: userStats.professors,
-      totalCourses: courseStats.total,
+      totalClassGroups: groupStats.total,
+      totalCourses: groupStats.total,
       activeSessionsCount: activeSessions,
       enrollmentGrowthPercent,
       attendanceRatePercent,
@@ -172,9 +276,20 @@ const getAdminDashboard = async (req, res) => {
         students: userStats.students,
         professors: userStats.professors,
         admins: userStats.admins,
-        byStatus
+        byStatus,
       },
-      courseStats: { total: courseStats.total, published: courseStats.published, draft: courseStats.draft, totalEnrollments: courseStats.totalEnrollments }
+      groupStats: {
+        total: groupStats.total,
+        active: groupStats.active,
+        archived: groupStats.archived,
+        totalEnrollments: groupStats.totalEnrollments,
+      },
+      courseStats: {
+        total: groupStats.total,
+        published: groupStats.active,
+        draft: groupStats.archived,
+        totalEnrollments: groupStats.totalEnrollments,
+      },
     });
   } catch (err) {
     console.error('getAdminDashboard:', err);
@@ -182,7 +297,7 @@ const getAdminDashboard = async (req, res) => {
   }
 };
 
-// GET /api/dashboard/student/schedule — planning étudiant (sessions non terminées)
+// GET /api/dashboard/student/schedule
 const getStudentSchedule = async (req, res) => {
   try {
     const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 180));
@@ -195,4 +310,9 @@ const getStudentSchedule = async (req, res) => {
   }
 };
 
-module.exports = { getStudentDashboard, getProfessorDashboard, getAdminDashboard, getStudentSchedule };
+module.exports = {
+  getStudentDashboard,
+  getProfessorDashboard,
+  getAdminDashboard,
+  getStudentSchedule,
+};

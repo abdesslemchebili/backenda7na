@@ -1,5 +1,4 @@
 const User = require('../models/User');
-const Course = require('../models/Course');
 const Language = require('../models/Language');
 const {
   sendPaymentStatusUpdate,
@@ -264,8 +263,7 @@ const getAllUsers = async (req, res) => {
       .sort(sort)
       .skip(skip)
       .limit(parseInt(limit))
-      .populate('studentInfo.enrolledCourses', 'title')
-      .populate('professorInfo.courses', 'title')
+      .populate('studentInfo.enrolledGroups', 'name languageId levelId level subLevel status')
       .populate('professorInfo.teachingLanguages', 'name code nativeName icon');
 
     const total = await User.countDocuments(filters);
@@ -296,8 +294,7 @@ const getUserById = async (req, res) => {
     const { id } = req.params;
     const user = await User.findById(id)
       .select('-password -emailVerificationToken -passwordResetToken')
-      .populate('studentInfo.enrolledCourses', 'title description')
-      .populate('professorInfo.courses', 'title description')
+      .populate('studentInfo.enrolledGroups', 'name languageId levelId level subLevel status description')
       .populate('professorInfo.teachingLanguages', 'name code nativeName icon');
 
     if (!user) {
@@ -779,8 +776,8 @@ const getMyProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
       .select('-password -emailVerificationToken -passwordResetToken')
-      .populate('studentInfo.enrolledCourses', 'title description')
-      .populate('professorInfo.courses', 'title description');
+      .populate('studentInfo.enrolledGroups', 'name languageId levelId level subLevel status description')
+      .populate('professorInfo.teachingLanguages', 'name code nativeName icon');
 
     res.json(user);
   } catch (error) {

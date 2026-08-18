@@ -18,11 +18,6 @@ const groupChallengeSchema = new mongoose.Schema(
     classGroupId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'ClassGroup',
-      default: null,
-    },
-    courseId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Course',
       required: true,
     },
     packId: {
@@ -48,7 +43,6 @@ const groupChallengeSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-groupChallengeSchema.index({ courseId: 1, status: 1, startsAt: -1 });
-groupChallengeSchema.index({ classGroupId: 1, status: 1 });
+groupChallengeSchema.index({ classGroupId: 1, status: 1, startsAt: -1 });
 
 module.exports = mongoose.model('GroupChallenge', groupChallengeSchema);

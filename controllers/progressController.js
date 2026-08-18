@@ -1,28 +1,33 @@
 const ChapterProgress = require('../models/ChapterProgress');
-const Course = require('../models/Course');
+const ClassGroup = require('../models/ClassGroup');
 const {
-  syncCourseChapterProgress,
-  getCourseLeaderboard,
+  syncGroupChapterProgress,
+  getGroupLeaderboard,
 } = require('../utils/chapterProgressHelper');
 
-async function canAccessCourseProgress(req, courseId) {
+async function canAccessGroupProgress(req, classGroupId) {
   if (req.user.role === 'admin') return true;
-  const course = await Course.findById(courseId).select('professor enrolledStudents');
-  if (!course) return false;
-  if (req.user.role === 'professor' && course.professor.toString() === req.user._id.toString()) {
+  const group = await ClassGroup.findById(classGroupId).select('professorId studentIds');
+  if (!group) return false;
+  if (
+    req.user.role === 'professor' &&
+    group.professorId?.toString() === req.user._id.toString()
+  ) {
     return true;
   }
   if (req.user.role === 'student') {
-    return course.enrolledStudents.some((e) => e.student?.toString() === req.user._id.toString());
+    return (group.studentIds || []).some(
+      (id) => id?.toString() === req.user._id.toString()
+    );
   }
   return false;
 }
 
-// GET /api/progress/course/:courseId
-const getCourseProgress = async (req, res) => {
+// GET /api/progress/group/:classGroupId
+const getGroupProgress = async (req, res) => {
   try {
-    const { courseId } = req.params;
-    if (!(await canAccessCourseProgress(req, courseId))) {
+    const classGroupId = req.params.classGroupId || req.params.courseId;
+    if (!(await canAccessGroupProgress(req, classGroupId))) {
       return res.status(403).json({ error: 'Forbidden', message: 'Not allowed' });
     }
 
@@ -33,28 +38,37 @@ const getCourseProgress = async (req, res) => {
       return res.status(403).json({ error: 'Forbidden', message: 'Not allowed' });
     }
 
-    const synced = await syncCourseChapterProgress(studentId, courseId);
+    const synced = await syncGroupChapterProgress(studentId, classGroupId);
     if (!synced) {
-      return res.status(404).json({ error: 'NotFound', message: 'Course or enrollment not found' });
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Class group or enrollment not found',
+      });
     }
 
     res.json(synced);
   } catch (err) {
-    console.error('getCourseProgress:', err);
+    console.error('getGroupProgress:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err.message });
   }
 };
 
-// POST /api/progress/course/:courseId/sync
+/** @deprecated alias */
+const getCourseProgress = getGroupProgress;
+
+// POST /api/progress/group/:classGroupId/sync
 const syncProgress = async (req, res) => {
   try {
-    const { courseId } = req.params;
+    const classGroupId = req.params.classGroupId || req.params.courseId;
     if (req.user.role !== 'student') {
       return res.status(403).json({ error: 'Forbidden', message: 'Students only' });
     }
-    const synced = await syncCourseChapterProgress(req.user._id, courseId);
+    const synced = await syncGroupChapterProgress(req.user._id, classGroupId);
     if (!synced) {
-      return res.status(404).json({ error: 'NotFound', message: 'Course or enrollment not found' });
+      return res.status(404).json({
+        error: 'NotFound',
+        message: 'Class group or enrollment not found',
+      });
     }
     res.json(synced);
   } catch (err) {
@@ -63,20 +77,20 @@ const syncProgress = async (req, res) => {
   }
 };
 
-// GET /api/progress/course/:courseId/leaderboard
+// GET /api/progress/group/:classGroupId/leaderboard
 const getLeaderboard = async (req, res) => {
   try {
-    const { courseId } = req.params;
-    if (!(await canAccessCourseProgress(req, courseId))) {
+    const classGroupId = req.params.classGroupId || req.params.courseId;
+    if (!(await canAccessGroupProgress(req, classGroupId))) {
       return res.status(403).json({ error: 'Forbidden', message: 'Not allowed' });
     }
 
     const limit = Math.min(50, parseInt(req.query.limit, 10) || 10);
-    const rows = await getCourseLeaderboard(courseId, limit);
+    const rows = await getGroupLeaderboard(classGroupId, limit);
 
     let myRank = null;
     if (req.user.role === 'student') {
-      const full = await getCourseLeaderboard(courseId, 500);
+      const full = await getGroupLeaderboard(classGroupId, 500);
       const mine = full.find((r) => r.studentId === req.user._id.toString());
       if (mine) myRank = mine.rank;
     }
@@ -88,11 +102,11 @@ const getLeaderboard = async (req, res) => {
   }
 };
 
-// GET /api/progress/course/:courseId/chapters — raw stored progress (no sync)
+// GET /api/progress/group/:classGroupId/chapters
 const getChapterProgress = async (req, res) => {
   try {
-    const { courseId } = req.params;
-    if (!(await canAccessCourseProgress(req, courseId))) {
+    const classGroupId = req.params.classGroupId || req.params.courseId;
+    if (!(await canAccessGroupProgress(req, classGroupId))) {
       return res.status(403).json({ error: 'Forbidden', message: 'Not allowed' });
     }
 
@@ -101,7 +115,12 @@ const getChapterProgress = async (req, res) => {
       return res.status(400).json({ error: 'ValidationError', message: 'studentId required' });
     }
 
-    const rows = await ChapterProgress.find({ student: studentId, course: courseId }).sort({ createdAt: 1 }).lean();
+    const rows = await ChapterProgress.find({
+      student: studentId,
+      classGroup: classGroupId,
+    })
+      .sort({ createdAt: 1 })
+      .lean();
     res.json({ data: rows });
   } catch (err) {
     console.error('getChapterProgress:', err);
@@ -110,6 +129,7 @@ const getChapterProgress = async (req, res) => {
 };
 
 module.exports = {
+  getGroupProgress,
   getCourseProgress,
   syncProgress,
   getLeaderboard,

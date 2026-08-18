@@ -26,9 +26,9 @@ const materialSchema = new mongoose.Schema(
       ref: 'Level',
       default: null,
     },
-    course: {
+    classGroup: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Course',
+      ref: 'ClassGroup',
       default: null,
     },
     book: {
@@ -56,7 +56,7 @@ const materialSchema = new mongoose.Schema(
 );
 
 materialSchema.index({ book: 1, chapter: 1, order: 1 });
-materialSchema.index({ course: 1, type: 1 });
+materialSchema.index({ classGroup: 1, type: 1 });
 materialSchema.index({ chapter: 1, active: 1 });
 
 module.exports = mongoose.model('Material', materialSchema);

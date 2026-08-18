@@ -32,9 +32,9 @@ const learningGameSchema = new mongoose.Schema(
       ref: 'Chapter',
       required: true,
     },
-    course: {
+    classGroup: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Course',
+      ref: 'ClassGroup',
       default: null,
     },
     items: {

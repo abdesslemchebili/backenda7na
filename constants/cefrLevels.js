@@ -21,7 +21,7 @@ const CEFR_LEVEL_ORDER = {
   C2: 6,
 };
 
-/** Map legacy Course.level → CEFR approximatif */
+/** Map legacy level strings → CEFR approximatif */
 const LEGACY_LEVEL_TO_CEFR = {
   beginner: 'A1',
   intermediate: 'B1',

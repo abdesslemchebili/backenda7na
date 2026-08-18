@@ -274,8 +274,8 @@ const requireUserOwnership = async (req, res, next) => {
   }
 };
 
-// Middleware pour vérifier si l'utilisateur est inscrit au cours
-const requireCourseEnrollment = async (req, res, next) => {
+// Middleware pour vérifier si l'utilisateur est membre de la cohorte
+const requireClassGroupEnrollment = async (req, res, next) => {
   try {
     if (!req.user) {
       return res.status(401).json({
@@ -291,29 +291,29 @@ const requireCourseEnrollment = async (req, res, next) => {
       });
     }
 
-    const courseId = req.params.courseId || req.params.id;
-    const Course = require('../models/Course');
-    const course = await Course.findById(courseId);
+    const classGroupId = req.params.classGroupId || req.params.courseId || req.params.id;
+    const ClassGroup = require('../models/ClassGroup');
+    const group = await ClassGroup.findById(classGroupId);
 
-    if (!course) {
+    if (!group) {
       return res.status(404).json({ 
-        error: 'Cours non trouvé',
-        message: 'Le cours demandé n\'existe pas'
+        error: 'Cohorte non trouvée',
+        message: 'La cohorte demandée n\'existe pas'
       });
     }
 
-    const isEnrolled = course.enrolledStudents.some(
-      enrollment => enrollment.student.toString() === req.user._id.toString()
+    const isEnrolled = (group.studentIds || []).some(
+      (id) => id && id.toString() === req.user._id.toString()
     );
 
     if (!isEnrolled) {
       return res.status(403).json({ 
         error: 'Non inscrit',
-        message: 'Vous devez être inscrit à ce cours pour y accéder'
+        message: 'Vous devez être membre de cette cohorte pour y accéder'
       });
     }
 
-    req.course = course;
+    req.classGroup = group;
     next();
   } catch (error) {
     console.error('Erreur lors de la vérification d\'inscription:', error);
@@ -323,6 +323,9 @@ const requireCourseEnrollment = async (req, res, next) => {
     });
   }
 };
+
+/** @deprecated alias */
+const requireCourseEnrollment = requireClassGroupEnrollment;
 
 module.exports = {
   authenticateToken,
@@ -334,5 +337,6 @@ module.exports = {
   requireStudentStatus,
   requireOwnership,
   requireUserOwnership,
+  requireClassGroupEnrollment,
   requireCourseEnrollment
 }; 

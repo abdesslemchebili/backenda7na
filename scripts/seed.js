@@ -4,10 +4,10 @@ require('dotenv').config();
 
 // Importer les modèles
 const User = require('../models/User');
-const Course = require('../models/Course');
 const Class = require('../models/Class');
 const Application = require('../models/Application');
 const ClassGroup = require('../models/ClassGroup');
+const Language = require('../models/Language');
 const Lead = require('../models/Lead');
 const { PlacementTest } = require('../models/PlacementTest');
 
@@ -28,7 +28,6 @@ const connectDB = async () => {
 const clearDatabase = async () => {
   try {
     await User.deleteMany({});
-    await Course.deleteMany({});
     await Class.deleteMany({});
     await Application.deleteMany({});
     await ClassGroup.deleteMany({});
@@ -221,155 +220,67 @@ const createUsers = async () => {
   }
 };
 
-// Fonction pour créer des cours de test
-const createCourses = async (users) => {
+// Fonction pour créer des cohorts (class groups)
+const createClassGroups = async (users) => {
   try {
-    const professors = users.filter(user => user.role === 'professor');
-    const courses = [
-      {
-        title: {
-          en: 'English for Beginners',
-          fr: 'Anglais pour débutants',
-          ar: 'الإنجليزية للمبتدئين'
-        },
-        description: {
-          en: 'A comprehensive course for absolute beginners in English',
-          fr: 'Un cours complet pour les débutants absolus en anglais',
-          ar: 'دورة شاملة للمبتدئين المطلقين في اللغة الإنجليزية'
-        },
-        shortDescription: {
-          en: 'Learn English from scratch with native speakers',
-          fr: 'Apprenez l\'anglais depuis le début avec des locuteurs natifs',
-          ar: 'تعلم الإنجليزية من الصفر مع متحدثين أصليين'
-        },
-        language: 'english',
-        level: 'beginner',
-        category: 'conversation',
-        duration: 40,
-        maxStudents: 15,
-        professor: professors[0]._id,
-        price: 800,
-        currency: 'MAD',
-        status: 'published',
-        isPublic: true,
-        featured: true,
-        syllabus: [
-          {
-            week: 1,
-            title: { en: 'Introduction to English', fr: 'Introduction à l\'anglais', ar: 'مقدمة في اللغة الإنجليزية' },
-            description: { en: 'Basic greetings and introductions', fr: 'Salutations et présentations de base', ar: 'التحيات والتعارف الأساسي' },
-            objectives: [
-              { en: 'Learn basic greetings', fr: 'Apprendre les salutations de base', ar: 'تعلم التحيات الأساسية' },
-              { en: 'Introduce yourself', fr: 'Se présenter', ar: 'تقديم نفسك' }
-            ]
-          }
-        ]
-      },
-      {
-        title: {
-          en: 'Modern Arabic Conversation',
-          fr: 'Conversation arabe moderne',
-          ar: 'محادثة عربية حديثة'
-        },
-        description: {
-          en: 'Learn to speak modern Arabic for daily communication',
-          fr: 'Apprenez à parler l\'arabe moderne pour la communication quotidienne',
-          ar: 'تعلم التحدث بالعربية الحديثة للتواصل اليومي'
-        },
-        shortDescription: {
-          en: 'Master everyday Arabic conversations',
-          fr: 'Maîtrisez les conversations arabes quotidiennes',
-          ar: 'أتقن المحادثات العربية اليومية'
-        },
-        language: 'arabic',
-        level: 'intermediate',
-        category: 'conversation',
-        duration: 30,
-        maxStudents: 12,
-        professor: professors[1]._id,
-        price: 600,
-        currency: 'MAD',
-        status: 'published',
-        isPublic: true,
-        featured: false
-      },
-      {
-        title: {
-          en: 'French Grammar Mastery',
-          fr: 'Maîtrise de la grammaire française',
-          ar: 'إتقان قواعد اللغة الفرنسية'
-        },
-        description: {
-          en: 'Advanced French grammar for intermediate to advanced learners',
-          fr: 'Grammaire française avancée pour les apprenants intermédiaires à avancés',
-          ar: 'قواعد اللغة الفرنسية المتقدمة للمتعلمين المتوسطين والمتقدمين'
-        },
-        shortDescription: {
-          en: 'Perfect your French grammar skills',
-          fr: 'Perfectionnez vos compétences en grammaire française',
-          ar: 'أتقن مهارات قواعد اللغة الفرنسية'
-        },
-        language: 'french',
-        level: 'advanced',
-        category: 'grammar',
-        duration: 25,
-        maxStudents: 10,
-        professor: professors[0]._id,
-        price: 1000,
-        currency: 'MAD',
-        status: 'published',
-        isPublic: true,
-        featured: false
-      }
-    ];
-
+    const prof = users.find((u) => u.email === 'sarah.johnson@languageschool.com');
+    const prof2 = users.find((u) => u.email === 'ahmed.almansouri@languageschool.com');
     const marie = users.find((u) => u.email === 'marie.dubois@example.com');
-    const createdCourses = [];
-    for (let i = 0; i < courses.length; i++) {
-      const courseData = courses[i];
-      const course = new Course(courseData);
-      // Marie is enrolled only in the English beginners course (demo)
-      if (marie && courseData.language === 'english') {
-        course.enrolledStudents.push({ student: marie._id, progress: 30, completed: false });
-      }
-      await course.save();
-      createdCourses.push(course);
-      console.log(`✅ Cours créé: ${course.title.en}`);
-    }
+    if (!prof) return [];
 
-    if (marie && createdCourses[0]) {
-      await User.findByIdAndUpdate(marie._id, {
-        $addToSet: { 'studentInfo.enrolledCourses': createdCourses[0]._id }
+    let english = await Language.findOne({ code: 'en' });
+    if (!english) {
+      english = await Language.create({
+        name: 'English',
+        code: 'en',
+        nativeName: 'English',
+        active: true,
+      });
+    }
+    let arabic = await Language.findOne({ code: 'ar' });
+    if (!arabic) {
+      arabic = await Language.create({
+        name: 'Arabic',
+        code: 'ar',
+        nativeName: 'العربية',
+        active: true,
       });
     }
 
-    return createdCourses;
-  } catch (error) {
-    console.error('❌ Erreur lors de la création des cours:', error);
-    throw error;
-  }
-};
-
-// Fonction pour créer des cohorts (class groups)
-const createClassGroups = async (users, courses) => {
-  try {
-    const prof = users.find((u) => u.email === 'sarah.johnson@languageschool.com');
-    const marie = users.find((u) => u.email === 'marie.dubois@example.com');
-    if (!prof || !courses[0]) return [];
-
-    const g = await ClassGroup.create({
+    const g1 = await ClassGroup.create({
       name: 'Cohort A — English Beginners',
       description: 'Demo cohort for admin / professor class-group pages',
-      courseId: courses[0]._id,
+      languageId: english._id,
+      level: 'A1',
+      subLevel: 'A1.1',
       professorId: prof._id,
       studentIds: marie ? [marie._id] : [],
-      status: 'active'
+      status: 'active',
     });
-    console.log(`✅ Class group créé: ${g.name}`);
-    if (marie) {
-      await User.findByIdAndUpdate(marie._id, { 'studentInfo.classGroupId': g._id });
+    console.log(`✅ Class group créé: ${g1.name}`);
+
+    const groups = [g1];
+    if (prof2) {
+      const g2 = await ClassGroup.create({
+        name: 'Cohort B — Arabic Conversation',
+        description: 'Demo Arabic cohort',
+        languageId: arabic._id,
+        level: 'A2',
+        professorId: prof2._id,
+        studentIds: [],
+        status: 'active',
+      });
+      console.log(`✅ Class group créé: ${g2.name}`);
+      groups.push(g2);
     }
-    return [g];
+
+    if (marie) {
+      await User.findByIdAndUpdate(marie._id, {
+        'studentInfo.classGroupId': g1._id,
+        $addToSet: { 'studentInfo.enrolledGroups': g1._id },
+      });
+    }
+    return groups;
   } catch (error) {
     console.error('❌ Erreur lors de la création des class groups:', error);
     throw error;
@@ -377,54 +288,56 @@ const createClassGroups = async (users, courses) => {
 };
 
 // Fonction pour créer des classes de test
-const createClasses = async (courses, users, classGroups) => {
+const createClasses = async (users, classGroups) => {
   try {
     const marie = users.find((u) => u.email === 'marie.dubois@example.com');
-    const cohortId = classGroups && classGroups[0] ? classGroups[0]._id : null;
+    if (!classGroups?.length) return [];
+
+    const g1 = classGroups[0];
+    const g2 = classGroups[1] || classGroups[0];
 
     const classes = [
       {
         title: {
           en: 'English Basics - Week 1',
-          fr: 'Bases d\'anglais - Semaine 1',
-          ar: 'أساسيات الإنجليزية - الأسبوع الأول'
+          fr: "Bases d'anglais - Semaine 1",
+          ar: 'أساسيات الإنجليزية - الأسبوع الأول',
         },
         description: {
           en: 'Introduction to English alphabet and basic greetings',
-          fr: 'Introduction à l\'alphabet anglais et aux salutations de base',
-          ar: 'مقدمة في الأبجدية الإنجليزية والتحيات الأساسية'
+          fr: "Introduction à l'alphabet anglais et aux salutations de base",
+          ar: 'مقدمة في الأبجدية الإنجليزية والتحيات الأساسية',
         },
-        course: courses[0]._id,
-        professor: courses[0].professor,
-        ...(cohortId ? { classGroupId: cohortId } : {}),
+        classGroupId: g1._id,
+        professor: g1.professorId,
         type: 'live',
         status: 'scheduled',
         schedule: {
-          startTime: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Dans 7 jours
-          endTime: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000 + 60 * 60 * 1000), // +1 heure
+          startTime: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          endTime: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000 + 60 * 60 * 1000),
           timezone: 'UTC',
-          recurrence: 'weekly'
+          recurrence: 'weekly',
         },
         maxStudents: 15,
         liveConfig: {
-          platform: 'zoom',
+          platform: 'livekit',
           waitingRoom: true,
-          recording: true
-        }
+          recording: true,
+        },
       },
       {
         title: {
           en: 'Arabic Conversation Practice',
           fr: 'Pratique de conversation arabe',
-          ar: 'ممارسة المحادثة العربية'
+          ar: 'ممارسة المحادثة العربية',
         },
         description: {
           en: 'Practice speaking Arabic in a supportive environment',
-          fr: 'Pratiquez l\'arabe dans un environnement bienveillant',
-          ar: 'مارس التحدث بالعربية في بيئة داعمة'
+          fr: "Pratiquez l'arabe dans un environnement bienveillant",
+          ar: 'مارس التحدث بالعربية في بيئة داعمة',
         },
-        course: courses[1]._id,
-        professor: courses[1].professor,
+        classGroupId: g2._id,
+        professor: g2.professorId,
         type: 'recorded',
         status: 'completed',
         content: {
@@ -432,15 +345,19 @@ const createClasses = async (courses, users, classGroups) => {
           videoDuration: 45,
           documents: [
             {
-              title: { en: 'Conversation Guide', fr: 'Guide de conversation', ar: 'دليل المحادثة' },
+              title: {
+                en: 'Conversation Guide',
+                fr: 'Guide de conversation',
+                ar: 'دليل المحادثة',
+              },
               url: 'https://example.com/docs/conversation-guide.pdf',
               type: 'pdf',
-              size: 1024000
-            }
-          ]
+              size: 1024000,
+            },
+          ],
         },
-        maxStudents: 12
-      }
+        maxStudents: 12,
+      },
     ];
 
     const createdClasses = [];
@@ -561,18 +478,16 @@ const seedDatabase = async () => {
     await clearDatabase();
     
     const users = await createUsers();
-    const courses = await createCourses(users);
-    const classGroups = await createClassGroups(users, courses);
-    const classes = await createClasses(courses, users, classGroups);
+    const classGroups = await createClassGroups(users);
+    const classes = await createClasses(users, classGroups);
     const applications = await createApplications();
     await createPlacementTest();
     
     console.log('\n🎉 Seeding terminé avec succès !');
     console.log(`📊 Statistiques:`);
     console.log(`   - ${users.length} utilisateurs créés`);
-    console.log(`   - ${courses.length} cours créés`);
-    console.log(`   - ${classes.length} classes créées`);
     console.log(`   - ${classGroups.length} cohortes (class groups) créées`);
+    console.log(`   - ${classes.length} classes créées`);
     console.log(`   - ${applications.length} candidatures créées`);
     
     console.log('\n🔑 Comptes de test:');

@@ -1,9 +1,8 @@
 const mongoose = require('mongoose');
-const Course = require('../models/Course');
 const ClassGroup = require('../models/ClassGroup');
 const Class = require('../models/Class');
 const User = require('../models/User');
-const { enrollStudentInCourseFromClassGroup } = require('./courseEnrollment');
+const { ensureStudentInClassGroup } = require('./groupEnrollment');
 
 /**
  * Sessions live visibles au planning étudiant : pas encore terminées
@@ -41,7 +40,7 @@ async function buildStudentScheduleMongoFilter(userId, options = {}) {
 
 /**
  * Contexte de visibilité des sessions live pour un étudiant :
- * cours inscrits, cohortes (studentIds + studentInfo.classGroupId).
+ * cohortes (studentIds + studentInfo.classGroupId + enrolledGroups).
  */
 async function getStudentVisibilityContext(userId) {
   const uid =
@@ -49,7 +48,9 @@ async function getStudentVisibilityContext(userId) {
       ? userId
       : new mongoose.Types.ObjectId(String(userId));
 
-  const user = await User.findById(uid).select('studentInfo.classGroupId').lean();
+  const user = await User.findById(uid)
+    .select('studentInfo.classGroupId studentInfo.enrolledGroups')
+    .lean();
 
   const groupQuery = {
     status: { $ne: 'archived' },
@@ -58,44 +59,24 @@ async function getStudentVisibilityContext(userId) {
   if (user?.studentInfo?.classGroupId) {
     groupQuery.$or.push({ _id: user.studentInfo.classGroupId });
   }
+  const enrolled = user?.studentInfo?.enrolledGroups || [];
+  if (enrolled.length) {
+    groupQuery.$or.push({ _id: { $in: enrolled } });
+  }
 
-  const [enrolledCourses, memberGroups] = await Promise.all([
-    Course.find({ 'enrolledStudents.student': uid }).select('_id').lean(),
-    ClassGroup.find(groupQuery).select('_id courseId professorId').lean(),
-  ]);
-
+  const memberGroups = await ClassGroup.find(groupQuery).select('_id professorId').lean();
   const classGroupIds = memberGroups.map((g) => g._id);
-  const courseIds = new Set(enrolledCourses.map((c) => c._id.toString()));
-
-  memberGroups.forEach((g) => {
-    if (g.courseId) courseIds.add(g.courseId.toString());
-  });
-
-  const cohortCourseProfessorPairs = memberGroups
-    .filter((g) => g.courseId && g.professorId)
-    .map((g) => ({
-      course: g.courseId,
-      professor: g.professorId,
-    }));
 
   return {
     userId: uid,
-    courseIds: Array.from(courseIds).map((id) => new mongoose.Types.ObjectId(id)),
     classGroupIds,
-    cohortCourseProfessorPairs,
   };
 }
 
 function buildStudentClassVisibilityFilter(ctx) {
   const or = [{ 'enrolledStudents.student': ctx.userId }];
-  if (ctx.courseIds.length) {
-    or.push({ course: { $in: ctx.courseIds } });
-  }
   if (ctx.classGroupIds.length) {
     or.push({ classGroupId: { $in: ctx.classGroupIds } });
-  }
-  for (const pair of ctx.cohortCourseProfessorPairs || []) {
-    or.push({ course: pair.course, professor: pair.professor });
   }
   return { $or: or };
 }
@@ -115,7 +96,7 @@ async function studentCanAccessClass(userId, classItem) {
 
 /**
  * À la création d'une session pour une cohorte : inscrire les étudiants
- * à la session (Class.enrolledStudents) et au cours lié.
+ * à la session (Class.enrolledStudents) et assurer le membership groupe.
  */
 async function enrollClassGroupStudentsInSession(classGroup, classDoc) {
   const studentIds = classGroup.studentIds || [];
@@ -131,41 +112,29 @@ async function enrollClassGroupStudentsInSession(classGroup, classDoc) {
       existing.add(sidStr);
     }
     try {
-      await enrollStudentInCourseFromClassGroup(sid, classGroup);
+      await ensureStudentInClassGroup(sid, classGroup);
     } catch (err) {
-      console.error('enrollStudentInCourseFromClassGroup:', sidStr, err.message);
+      console.error('ensureStudentInClassGroup:', sidStr, err.message);
     }
   }
 }
 
 /**
- * Synchronise un étudiant avec sa cohorte : profil, cours, sessions existantes.
+ * Synchronise un étudiant avec sa cohorte : profil + sessions existantes.
  */
 async function syncStudentToClassGroup(userId, classGroup) {
   if (!classGroup?._id) return;
 
-  await User.findByIdAndUpdate(userId, {
-    'studentInfo.classGroupId': classGroup._id,
-  });
-
   try {
-    await enrollStudentInCourseFromClassGroup(userId, classGroup);
+    await ensureStudentInClassGroup(userId, classGroup);
   } catch (err) {
     console.error('syncStudentToClassGroup enroll:', userId, err.message);
-  }
-
-  const sessionOr = [{ classGroupId: classGroup._id }];
-  if (classGroup.courseId && classGroup.professorId) {
-    sessionOr.push({
-      course: classGroup.courseId,
-      professor: classGroup.professorId,
-    });
   }
 
   const sessions = await Class.find({
     type: 'live',
     status: { $in: ['scheduled', 'ongoing'] },
-    $or: sessionOr,
+    classGroupId: classGroup._id,
   });
   const userIdStr = userId.toString();
   for (const session of sessions) {
@@ -188,13 +157,17 @@ async function syncClassGroupStudents(classGroup) {
 
 /** Appelé au chargement du dashboard étudiant pour rattraper les sessions manquantes. */
 async function syncStudentCohortSessions(userId) {
-  const user = await User.findById(userId).select('studentInfo.classGroupId').lean();
+  const user = await User.findById(userId).select('studentInfo.classGroupId studentInfo.enrolledGroups').lean();
   const query = {
     status: { $ne: 'archived' },
     $or: [{ studentIds: userId }],
   };
   if (user?.studentInfo?.classGroupId) {
     query.$or.push({ _id: user.studentInfo.classGroupId });
+  }
+  const enrolled = user?.studentInfo?.enrolledGroups || [];
+  if (enrolled.length) {
+    query.$or.push({ _id: { $in: enrolled } });
   }
   const groups = await ClassGroup.find(query);
   for (const group of groups) {
@@ -222,9 +195,8 @@ async function fetchStudentScheduleSessions(userId, options = {}) {
   await syncStudentCohortSessions(userId);
   const filter = await buildStudentScheduleMongoFilter(userId, options);
   return Class.find(filter)
-    .populate('course', 'title')
+    .populate('classGroupId', 'name languageId level bookId')
     .populate('professor', 'firstName lastName email')
-    .populate('classGroupId', 'name')
     .sort({ 'schedule.startTime': 1 })
     .limit(options.limit ?? 100)
     .lean();

@@ -183,25 +183,30 @@ async function uploadLocalFileToObjectStorage({ localPath, key, contentType }) {
 
 /**
  * Stream an object from S3/R2 (Body is a Node Readable).
+ * @param {string} storageUrl
+ * @param {{ range?: string }} [opts] HTTP Range header value, e.g. "bytes=0-65535"
  */
-async function getObjectStream(storageUrl) {
+async function getObjectStream(storageUrl, opts = {}) {
   const key = normalizeStorageKey(storageUrl);
   if (!key || !isObjectStorageConfigured()) {
     throw new Error('Object not available in storage');
   }
   const cfg = getObjectStorageConfig();
   const client = createS3Client();
-  const out = await client.send(
-    new GetObjectCommand({
-      Bucket: cfg.bucket,
-      Key: key,
-    })
-  );
+  const params = {
+    Bucket: cfg.bucket,
+    Key: key,
+  };
+  if (opts.range) params.Range = opts.range;
+  const out = await client.send(new GetObjectCommand(params));
   return {
     key,
     body: out.Body,
     contentType: out.ContentType || 'application/octet-stream',
     contentLength: out.ContentLength,
+    contentRange: out.ContentRange || null,
+    acceptRanges: out.AcceptRanges || 'bytes',
+    statusCode: opts.range ? 206 : 200,
   };
 }
 

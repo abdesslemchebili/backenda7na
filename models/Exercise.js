@@ -37,9 +37,9 @@ const exerciseSchema = new mongoose.Schema(
       ref: 'Chapter',
       required: [true, 'Chapter is required'],
     },
-    course: {
+    classGroup: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Course',
+      ref: 'ClassGroup',
       default: null,
     },
     order: { type: Number, default: 0 },

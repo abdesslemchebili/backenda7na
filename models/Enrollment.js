@@ -9,9 +9,9 @@ const enrollmentSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
-    course: {
+    classGroup: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Course',
+      ref: 'ClassGroup',
       required: true,
     },
     enrolledAt: {
@@ -33,16 +33,16 @@ const enrollmentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-/** One active enrollment per student per course */
+/** One active enrollment per student per class group */
 enrollmentSchema.index(
-  { student: 1, course: 1 },
+  { student: 1, classGroup: 1 },
   {
     unique: true,
     partialFilterExpression: { status: 'active' },
   }
 );
 
-enrollmentSchema.index({ course: 1, status: 1 });
+enrollmentSchema.index({ classGroup: 1, status: 1 });
 enrollmentSchema.index({ student: 1, status: 1 });
 
 module.exports = mongoose.model('Enrollment', enrollmentSchema);

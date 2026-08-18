@@ -11,9 +11,9 @@ const assignmentSchema = new mongoose.Schema({
     fr: { type: String, default: '' },
     ar: { type: String, default: '' }
   },
-  course: {
+  classGroup: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Course',
+    ref: 'ClassGroup',
     required: true
   },
   dueAt: { type: Date, required: true },
@@ -25,6 +25,6 @@ const assignmentSchema = new mongoose.Schema({
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 }, { timestamps: true });
 
-assignmentSchema.index({ course: 1 });
+assignmentSchema.index({ classGroup: 1 });
 
 module.exports = mongoose.model('Assignment', assignmentSchema);

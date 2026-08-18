@@ -10,6 +10,21 @@ const classGroupSchema = new mongoose.Schema(
       maxlength: [200, 'Name too long']
     },
     description: { type: String, trim: true },
+    languageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Language',
+      required: [true, 'Language is required'],
+    },
+    levelId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Level',
+      default: null,
+    },
+    bookId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Book',
+      default: null,
+    },
     level: {
       type: String,
       enum: GERMAN_LEVELS,
@@ -32,11 +47,6 @@ const classGroupSchema = new mongoose.Schema(
     },
     startDate: { type: Date, default: null },
     endDate: { type: Date, default: null },
-    courseId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Course',
-      default: null
-    },
     professorId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -58,6 +68,8 @@ const classGroupSchema = new mongoose.Schema(
 );
 
 classGroupSchema.index({ professorId: 1 });
-classGroupSchema.index({ courseId: 1 });
+classGroupSchema.index({ languageId: 1, levelId: 1 });
+classGroupSchema.index({ bookId: 1 });
+classGroupSchema.index({ status: 1 });
 
 module.exports = mongoose.model('ClassGroup', classGroupSchema);

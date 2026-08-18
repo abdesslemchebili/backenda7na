@@ -1,8 +1,13 @@
 const path = require('path');
 const fs = require('fs');
 const Book = require('../models/Book');
-const Course = require('../models/Course');
 const { buildSignedFileUrl, getSignedUrlExpiryIso } = require('../utils/fileAccess');
+const {
+  canReadBookCatalog,
+  canAccessBookContent,
+  isEnrolledInBookGroup,
+  isProfessorOfBookGroup,
+} = require('../utils/bookAccess');
 const {
   isObjectStorageConfigured,
   isLocalUploadPath,
@@ -36,9 +41,14 @@ function formatBook(doc) {
     levelDoc: lvl?._id
       ? { _id: lvl._id, code: lvl.code, name: lvl.name }
       : undefined,
+    isbn: o.isbn || '',
     coverUrl: o.coverUrl,
     pdfUrl: o.pdfUrl,
+    hasPdf: Boolean(o.pdfUrl),
     pdfSize: o.pdfSize,
+    pdfMimeType: o.pdfMimeType || 'application/pdf',
+    pageCount: o.pageCount || 0,
+    publicResource: Boolean(o.publicResource),
     description: o.description,
     status: o.status,
     active: o.active,
@@ -48,26 +58,11 @@ function formatBook(doc) {
   };
 }
 
-async function canReadBook(req, book) {
-  if (!req.user) return book.status === 'published' && book.active !== false;
-  if (req.user.role === 'admin') return true;
-  if (book.status === 'published' && book.active !== false) return true;
-  if (req.user.role === 'professor') {
-    if (book.createdBy?.toString() === req.user._id.toString()) return true;
-    return isProfessorOfBookCourse(req.user._id, book._id);
-  }
-  return false;
-}
+const canReadBook = canReadBookCatalog;
 
-async function isEnrolledInBookCourse(userId, bookId) {
-  const course = await Course.findOne({ bookId, 'enrolledStudents.student': userId }).select('_id');
-  return !!course;
-}
-
-async function isProfessorOfBookCourse(userId, bookId) {
-  const course = await Course.findOne({ bookId, professor: userId }).select('_id');
-  return !!course;
-}
+/** @deprecated aliases */
+const isEnrolledInBookCourse = isEnrolledInBookGroup;
+const isProfessorOfBookCourse = isProfessorOfBookGroup;
 
 // GET /api/books
 const listBooks = async (req, res) => {
@@ -133,7 +128,7 @@ const getBook = async (req, res) => {
 // POST /api/books
 const createBook = async (req, res) => {
   try {
-    const { title, author, publisher, languageId, levelId, description, status, active } = req.body;
+    const { title, author, publisher, isbn, languageId, levelId, description, status, active, publicResource } = req.body;
     if (!languageId) {
       return res.status(400).json({ error: 'ValidationError', message: 'languageId is required' });
     }
@@ -151,11 +146,13 @@ const createBook = async (req, res) => {
       title: titleObj,
       author: author ? String(author).trim() : undefined,
       publisher: publisher ? String(publisher).trim() : undefined,
+      isbn: isbn ? String(isbn).trim() : '',
       language: languageId,
       level: levelId || null,
       description: description || undefined,
       status: ['draft', 'published', 'archived'].includes(status) ? status : 'draft',
       active: active !== false,
+      publicResource: Boolean(publicResource),
       createdBy: req.user._id,
     });
 
@@ -179,12 +176,13 @@ const updateBook = async (req, res) => {
       return res.status(404).json({ error: 'NotFound', message: 'Book not found' });
     }
 
-    const { title, author, publisher, languageId, levelId, description, status, active } = req.body;
+    const { title, author, publisher, isbn, languageId, levelId, description, status, active, publicResource } = req.body;
     if (title !== undefined) {
       book.title = typeof title === 'string' ? { fr: title, en: title, ar: book.title?.ar || '' } : title;
     }
     if (author !== undefined) book.author = author ? String(author).trim() : '';
     if (publisher !== undefined) book.publisher = publisher ? String(publisher).trim() : '';
+    if (isbn !== undefined) book.isbn = isbn ? String(isbn).trim() : '';
     if (languageId !== undefined) book.language = languageId;
     if (levelId !== undefined) book.level = levelId || null;
     if (description !== undefined) book.description = description;
@@ -192,6 +190,7 @@ const updateBook = async (req, res) => {
       book.status = status;
     }
     if (active !== undefined) book.active = Boolean(active);
+    if (publicResource !== undefined) book.publicResource = Boolean(publicResource);
 
     await book.save();
     const populated = await Book.findById(book._id)
@@ -251,6 +250,7 @@ const uploadBookPdf = async (req, res) => {
     }
 
     book.pdfSize = req.file.size || 0;
+    book.pdfMimeType = req.file.mimetype || 'application/pdf';
     await book.save();
 
     if (previousPdfUrl && previousPdfUrl !== book.pdfUrl) {
@@ -300,13 +300,7 @@ const downloadBookPdf = async (req, res) => {
       return res.status(404).json({ error: 'NotFound', message: 'PDF not available' });
     }
 
-    let allowed = await canReadBook(req, book);
-    if (!allowed && req.user?.role === 'student') {
-      allowed = await isEnrolledInBookCourse(req.user._id, book._id);
-    }
-    if (!allowed && req.user?.role === 'professor') {
-      allowed = await isProfessorOfBookCourse(req.user._id, book._id);
-    }
+    const allowed = await canAccessBookContent(req, book);
     if (!allowed) {
       return res.status(403).json({ error: 'Forbidden', message: 'Not allowed to download this book' });
     }

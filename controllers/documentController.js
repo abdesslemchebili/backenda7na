@@ -1,20 +1,54 @@
 const path = require('path');
 const fs = require('fs');
 const Document = require('../models/Document');
-const Course = require('../models/Course');
+const ClassGroup = require('../models/ClassGroup');
 const { buildSignedFileUrl, getSignedUrlExpiryIso } = require('../utils/fileAccess');
 
-// POST /api/courses/:courseId/documents - upload document
+function isGroupProfessor(group, userId) {
+  return group?.professorId && group.professorId.toString() === userId.toString();
+}
+
+function isGroupStudent(group, userId) {
+  return (group?.studentIds || []).some((id) => id && id.toString() === userId.toString());
+}
+
+async function assertGroupAccess(req, classGroupId, { write = false } = {}) {
+  const group = await ClassGroup.findById(classGroupId);
+  if (!group) {
+    return { error: { status: 404, body: { error: 'NotFound', message: 'Class group not found' } } };
+  }
+  const isProfessor = req.user.role === 'professor' && isGroupProfessor(group, req.user._id);
+  const isAdmin = req.user.role === 'admin';
+  const isMember = isGroupStudent(group, req.user._id);
+
+  if (write) {
+    if (!isProfessor && !isAdmin) {
+      return {
+        error: {
+          status: 403,
+          body: { error: 'Forbidden', message: 'Not authorized to upload to this class group' },
+        },
+      };
+    }
+  } else if (!isProfessor && !isAdmin && !isMember) {
+    return {
+      error: {
+        status: 403,
+        body: { error: 'Forbidden', message: 'Not authorized to view these documents' },
+      },
+    };
+  }
+
+  return { group };
+}
+
+// POST /api/class-groups/:classGroupId/documents
 const uploadDocument = async (req, res) => {
   try {
-    const { courseId } = req.params;
-    const course = await Course.findById(courseId);
-    if (!course) {
-      return res.status(404).json({ error: 'NotFound', message: 'Course not found' });
-    }
-    if (req.user.role === 'professor' && course.professor.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ error: 'Forbidden', message: 'Not authorized to upload to this course' });
-    }
+    const classGroupId = req.params.classGroupId || req.params.courseId;
+    const access = await assertGroupAccess(req, classGroupId, { write: true });
+    if (access.error) return res.status(access.error.status).json(access.error.body);
+
     if (!req.file) {
       return res.status(400).json({ error: 'BadRequest', message: 'File is required' });
     }
@@ -28,8 +62,8 @@ const uploadDocument = async (req, res) => {
       url: relativePath,
       type: docType,
       size: req.file.size || 0,
-      course: courseId,
-      uploadedBy: req.user._id
+      classGroup: classGroupId,
+      uploadedBy: req.user._id,
     });
     await doc.save();
     res.status(201).json({
@@ -38,9 +72,10 @@ const uploadDocument = async (req, res) => {
       url: doc.url,
       type: doc.type,
       size: doc.size,
-      course: courseId,
+      classGroupId,
+      classGroup: classGroupId,
       uploadedBy: req.user._id,
-      createdAt: doc.createdAt
+      createdAt: doc.createdAt,
     });
   } catch (err) {
     console.error('uploadDocument:', err);
@@ -49,68 +84,78 @@ const uploadDocument = async (req, res) => {
   }
 };
 
-// GET /api/courses/:courseId/documents - list by course
-const listByCourse = async (req, res) => {
+// GET /api/class-groups/:classGroupId/documents
+const listByClassGroup = async (req, res) => {
   try {
-    const { courseId } = req.params;
-    const course = await Course.findById(courseId);
-    if (!course) {
-      return res.status(404).json({ error: 'NotFound', message: 'Course not found' });
-    }
-    const isProfessor = req.user.role === 'professor' && course.professor.toString() === req.user._id.toString();
-    const isAdmin = req.user.role === 'admin';
-    const isEnrolled = course.enrolledStudents.some(e => e.student && e.student.toString() === req.user._id.toString());
-    if (!isProfessor && !isAdmin && !isEnrolled) {
-      return res.status(403).json({ error: 'Forbidden', message: 'Not authorized to view these documents' });
-    }
+    const classGroupId = req.params.classGroupId || req.params.courseId;
+    const access = await assertGroupAccess(req, classGroupId);
+    if (access.error) return res.status(access.error.status).json(access.error.body);
+
     const { page = 1, limit = 20, type, search } = req.query;
-    const filter = { course: courseId };
+    const filter = { classGroup: classGroupId };
     if (type) filter.type = type;
     if (search) {
       filter.$or = [
         { 'title.en': { $regex: search, $options: 'i' } },
         { 'title.fr': { $regex: search, $options: 'i' } },
-        { 'title.ar': { $regex: search, $options: 'i' } }
+        { 'title.ar': { $regex: search, $options: 'i' } },
       ];
     }
     const skip = (Math.max(1, parseInt(page)) - 1) * Math.min(100, parseInt(limit) || 20);
     const limitNum = Math.min(100, parseInt(limit) || 20);
     const [data, total] = await Promise.all([
-      Document.find(filter).populate('uploadedBy', 'firstName lastName').sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
-      Document.countDocuments(filter)
+      Document.find(filter)
+        .populate('uploadedBy', 'firstName lastName')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      Document.countDocuments(filter),
     ]);
     res.json({
       data,
-      pagination: { page: Math.max(1, parseInt(page)), limit: limitNum, total, pages: Math.ceil(total / limitNum) }
+      pagination: {
+        page: Math.max(1, parseInt(page)),
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum),
+      },
     });
   } catch (err) {
-    console.error('listByCourse:', err);
+    console.error('listByClassGroup:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err.message });
   }
 };
 
+/** @deprecated alias */
+const listByCourse = listByClassGroup;
+
 // GET /api/documents/:id/download
 const downloadDocument = async (req, res) => {
   try {
-    const doc = await Document.findById(req.params.id).populate('course');
+    const doc = await Document.findById(req.params.id).populate('classGroup');
     if (!doc) {
       return res.status(404).json({ error: 'NotFound', message: 'Document not found' });
     }
-    const course = doc.course;
-    const isProfessor = req.user.role === 'professor' && course.professor.toString() === req.user._id.toString();
+    const group = doc.classGroup;
+    if (!group) {
+      return res.status(404).json({ error: 'NotFound', message: 'Class group not found' });
+    }
+    const isProfessor = req.user.role === 'professor' && isGroupProfessor(group, req.user._id);
     const isAdmin = req.user.role === 'admin';
-    const isEnrolled = course.enrolledStudents.some(e => e.student && e.student.toString() === req.user._id.toString());
-    if (!isProfessor && !isAdmin && !isEnrolled) {
+    const isMember = isGroupStudent(group, req.user._id);
+    if (!isProfessor && !isAdmin && !isMember) {
       return res.status(403).json({ error: 'Forbidden', message: 'Not authorized' });
     }
-    const filename = (doc.title && doc.title.en)
-      ? `${doc.title.en}.${doc.type || 'pdf'}`
-      : (doc.url.split('/').pop() || 'document');
+    const filename =
+      doc.title && doc.title.en
+        ? `${doc.title.en}.${doc.type || 'pdf'}`
+        : doc.url.split('/').pop() || 'document';
     const url = buildSignedFileUrl(doc.url, req.user._id, req);
     res.json({
       url,
       expiresAt: getSignedUrlExpiryIso(),
-      filename
+      filename,
     });
   } catch (err) {
     console.error('downloadDocument:', err);
@@ -121,13 +166,23 @@ const downloadDocument = async (req, res) => {
 // DELETE /api/documents/:id
 const deleteDocument = async (req, res) => {
   try {
-    const doc = await Document.findById(req.params.id).populate('course');
+    const doc = await Document.findById(req.params.id).populate('classGroup');
     if (!doc) {
       return res.status(404).json({ error: 'NotFound', message: 'Document not found' });
     }
-    const course = doc.course;
-    if (req.user.role === 'professor' && course.professor.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Forbidden', message: 'Not authorized to delete this document' });
+    const group = doc.classGroup;
+    if (
+      req.user.role === 'professor' &&
+      !isGroupProfessor(group, req.user._id) &&
+      req.user.role !== 'admin'
+    ) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Not authorized to delete this document',
+      });
+    }
+    if (req.user.role !== 'admin' && req.user.role !== 'professor') {
+      return res.status(403).json({ error: 'Forbidden', message: 'Not authorized' });
     }
     await Document.findByIdAndDelete(req.params.id);
     res.json({ message: 'Document deleted successfully' });
@@ -146,7 +201,7 @@ const uploadImage = async (req, res) => {
     const relativePath = `/uploads/images/${req.file.filename}`;
     res.json({
       url: relativePath,
-      signedUrl: buildSignedFileUrl(relativePath, req.user._id, req)
+      signedUrl: buildSignedFileUrl(relativePath, req.user._id, req),
     });
   } catch (err) {
     console.error('uploadImage:', err);
@@ -156,8 +211,9 @@ const uploadImage = async (req, res) => {
 
 module.exports = {
   uploadDocument,
+  listByClassGroup,
   listByCourse,
   downloadDocument,
   deleteDocument,
-  uploadImage
+  uploadImage,
 };

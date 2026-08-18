@@ -1,5 +1,4 @@
 const Class = require('../models/Class');
-const Course = require('../models/Course');
 const User = require('../models/User');
 const ClassGroup = require('../models/ClassGroup');
 const Recording = require('../models/Recording');
@@ -55,6 +54,7 @@ function formatControllerError(error) {
 const getAllClasses = async (req, res) => {
   try {
     const { 
+      classGroupId,
       course, 
       type, 
       status, 
@@ -68,7 +68,8 @@ const getAllClasses = async (req, res) => {
 
     // Construire les filtres
     let filters = {};
-    if (course) filters.course = course;
+    const groupFilter = classGroupId || course;
+    if (groupFilter) filters.classGroupId = groupFilter;
     if (type) filters.type = type;
     if (status) filters.status = status;
     if (professor) filters.professor = professor;
@@ -89,15 +90,13 @@ const getAllClasses = async (req, res) => {
       const base = { ...filters };
       filters = Object.keys(base).length ? { $and: [base, visibility] } : visibility;
     } else if (req.user && req.user.role === 'professor') {
-      // Les professeurs voient leurs propres classes et celles des cours publics
-      const publicCourses = await Course.find({ status: 'published' }).select('_id');
-      const myCourses = await Course.find({ professor: req.user._id }).select('_id');
-      
       filters.$or = [
-        { course: { $in: publicCourses.map(c => c._id) } },
-        { course: { $in: myCourses.map(c => c._id) } },
-        { professor: req.user._id }
+        { professor: req.user._id },
       ];
+      const myGroups = await ClassGroup.find({ professorId: req.user._id }).select('_id');
+      if (myGroups.length) {
+        filters.$or.push({ classGroupId: { $in: myGroups.map((g) => g._id) } });
+      }
     }
     // Les admins voient toutes les classes
 
@@ -112,7 +111,7 @@ const getAllClasses = async (req, res) => {
       .sort(sort)
       .skip(skip)
       .limit(parseInt(limit))
-      .populate('course', 'title')
+      .populate('classGroupId', 'name languageId levelId bookId')
       .populate('professor', 'firstName lastName email')
       .populate('chapterId', 'title displayTitle order')
       .populate('enrolledStudents.student', 'firstName lastName email');
@@ -163,7 +162,7 @@ const getClassById = async (req, res) => {
     }
 
     const classItem = await Class.findById(id)
-      .populate('course', 'title description')
+      .populate('classGroupId', 'name languageId levelId bookId description')
       .populate('professor', 'firstName lastName email bio')
       .populate('chapterId', 'title displayTitle order pageStart pageEnd')
       .populate('enrolledStudents.student', 'firstName lastName email');
@@ -188,9 +187,11 @@ const getClassById = async (req, res) => {
     } else if (req.user.role === 'professor') {
       const profId = classItem.professor?.toString?.();
       if (profId !== req.user._id.toString()) {
-        const course = await Course.findById(classItem.course);
-        const courseProfId = course?.professor?.toString?.();
-        if (!courseProfId || courseProfId !== req.user._id.toString()) {
+        const group = classItem.classGroupId
+          ? await ClassGroup.findById(classItem.classGroupId).select('professorId')
+          : null;
+        const groupProfId = group?.professorId?.toString?.();
+        if (!groupProfId || groupProfId !== req.user._id.toString()) {
           return res.status(403).json({ 
             success: false, 
             error: 'Accès non autorisé à cette classe' 
@@ -220,6 +221,13 @@ const createClass = async (req, res) => {
     const classData = { ...req.body };
     let cohortForEnroll = null;
 
+    if (!classData.classGroupId) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'classGroupId is required',
+      });
+    }
+
     if (classData.classGroupId) {
       const cg = await ClassGroup.findById(classData.classGroupId);
       cohortForEnroll = cg;
@@ -227,16 +235,10 @@ const createClass = async (req, res) => {
         return res.status(400).json({ error: 'BadRequest', message: 'Cohorte introuvable' });
       }
       if (!cg.professorId) {
-        return res.status(400).json({ error: 'BadRequest', message: 'La cohorte n\'a pas de professeur assigné' });
-      }
-      if (!classData.course && cg.courseId) {
-        classData.course = cg.courseId;
-      }
-      if (!classData.course) {
-        return res.status(400).json({ error: 'BadRequest', message: 'Cours requis pour planifier une session' });
-      }
-      if (cg.courseId && classData.course.toString() !== cg.courseId.toString()) {
-        return res.status(400).json({ error: 'BadRequest', message: 'Le cours ne correspond pas à la cohorte' });
+        return res.status(400).json({
+          error: 'BadRequest',
+          message: "La cohorte n'a pas de professeur assigné",
+        });
       }
       if (req.user.role === 'professor') {
         if (cg.professorId.toString() !== req.user._id.toString()) {
@@ -252,6 +254,8 @@ const createClass = async (req, res) => {
     } else if (!classData.professor) {
       classData.professor = req.user._id;
     }
+
+    delete classData.course;
 
     if (!classData.professor) {
       return res.status(400).json({ error: 'BadRequest', message: 'Professeur requis' });
@@ -304,12 +308,13 @@ const createClass = async (req, res) => {
     }
 
     if (req.user.role === 'professor') {
-      const course = await Course.findById(classData.course);
-      const ownerId = course?.professor?.toString?.();
-      if (!course || !ownerId || ownerId !== req.user._id.toString()) {
+      if (
+        !cohortForEnroll ||
+        cohortForEnroll.professorId.toString() !== req.user._id.toString()
+      ) {
         return res.status(403).json({
           success: false,
-          error: 'Vous ne pouvez créer des classes que pour vos propres cours',
+          error: 'Vous ne pouvez créer des classes que pour vos propres cohortes',
         });
       }
     }
@@ -358,7 +363,7 @@ const createClass = async (req, res) => {
     }
 
     const populatedClass = await Class.findById(classItem._id)
-      .populate('course', 'title')
+      .populate('classGroupId', 'name')
       .populate('professor', 'firstName lastName email');
 
     const cohortStudentCount = (cohortForEnroll?.studentIds || []).length;
@@ -406,8 +411,8 @@ const updateClass = async (req, res) => {
 
     // Vérifier les permissions
     if (req.user.role === 'professor' && classItem.professor.toString() !== req.user._id.toString()) {
-      const course = await Course.findById(classItem.course);
-      if (!course || course.professor.toString() !== req.user._id.toString()) {
+      const group = await ClassGroup.findById(classItem.classGroupId).select('professorId');
+      if (!group || group.professorId.toString() !== req.user._id.toString()) {
         return res.status(403).json({ 
           success: false, 
           error: 'Vous ne pouvez modifier que vos propres classes' 
@@ -419,7 +424,7 @@ const updateClass = async (req, res) => {
       id,
       updateData,
       { new: true, runValidators: true }
-    ).populate('course', 'title')
+    ).populate('classGroupId', 'name')
      .populate('professor', 'firstName lastName email');
 
     res.json(updatedClass);
@@ -449,16 +454,14 @@ const deleteClass = async (req, res) => {
 
     // Vérifier les permissions
     if (req.user.role === 'professor' && classItem.professor.toString() !== req.user._id.toString()) {
-      const course = await Course.findById(classItem.course);
-      if (!course || course.professor.toString() !== req.user._id.toString()) {
+      const group = await ClassGroup.findById(classItem.classGroupId).select('professorId');
+      if (!group || group.professorId.toString() !== req.user._id.toString()) {
         return res.status(403).json({ 
           success: false, 
           error: 'Vous ne pouvez supprimer que vos propres classes' 
         });
       }
     }
-
-    // Note: Course model doesn't have a classes field - classes are linked via course field
 
     await Class.findByIdAndDelete(id);
 
@@ -497,15 +500,15 @@ const enrollStudent = async (req, res) => {
       });
     }
 
-    // Vérifier que l'étudiant est inscrit au cours
-    const course = await Course.findById(classItem.course);
-    const isEnrolledInCourse = course.enrolledStudents.some(
-      enrollment => enrollment.student.toString() === req.user._id.toString()
+    // Vérifier que l'étudiant est membre de la cohorte
+    const group = await ClassGroup.findById(classItem.classGroupId).select('studentIds');
+    const isMember = (group?.studentIds || []).some(
+      (id) => id && id.toString() === req.user._id.toString()
     );
-    if (!isEnrolledInCourse) {
+    if (!isMember) {
       return res.status(403).json({ 
         success: false, 
-        error: 'Vous devez être inscrit au cours pour participer à cette classe' 
+        error: 'Vous devez être membre de la cohorte pour participer à cette classe' 
       });
     }
 
@@ -537,7 +540,7 @@ const getJoinToken = async (req, res) => {
     }
 
     const classItem = await Class.findById(req.params.id)
-      .populate('course', 'title')
+      .populate('classGroupId', 'name')
       .populate('professor', 'firstName lastName');
 
     if (!classItem) {
@@ -628,8 +631,8 @@ const startSession = async (req, res) => {
       return res.status(404).json({ error: 'NotFound', message: 'Class not found' });
     }
     if (req.user.role === 'professor' && classItem.professor.toString() !== req.user._id.toString()) {
-      const course = await Course.findById(classItem.course);
-      if (!course || course.professor.toString() !== req.user._id.toString()) {
+      const group = await ClassGroup.findById(classItem.classGroupId).select('professorId');
+      if (!group || group.professorId.toString() !== req.user._id.toString()) {
         return res.status(403).json({ error: 'Forbidden', message: 'Not authorized to start this session' });
       }
     }
@@ -658,7 +661,7 @@ const startSession = async (req, res) => {
     if (typeof recordingStarted === 'boolean') update['liveConfig.recordingStarted'] = recordingStarted;
 
     const updated = await Class.findByIdAndUpdate(id, update, { new: true })
-      .populate('course', 'title')
+      .populate('classGroupId', 'name')
       .populate('professor', 'firstName lastName email')
       .populate('chapterId', 'title displayTitle order');
 
@@ -736,8 +739,8 @@ const endSession = async (req, res) => {
       return res.status(404).json({ error: 'NotFound', message: 'Class not found' });
     }
     if (req.user.role === 'professor' && classItem.professor.toString() !== req.user._id.toString()) {
-      const course = await Course.findById(classItem.course);
-      if (!course || course.professor.toString() !== req.user._id.toString()) {
+      const group = await ClassGroup.findById(classItem.classGroupId).select('professorId');
+      if (!group || group.professorId.toString() !== req.user._id.toString()) {
         return res.status(403).json({ error: 'Forbidden', message: 'Not authorized to end this session' });
       }
     }
@@ -756,7 +759,7 @@ const endSession = async (req, res) => {
     }
 
     const updated = await Class.findByIdAndUpdate(id, update, { new: true })
-      .populate('course', 'title')
+      .populate('classGroupId', 'name')
       .populate('professor', 'firstName lastName email')
       .populate('chapterId', 'title displayTitle order');
 
@@ -819,8 +822,8 @@ const markAttendance = async (req, res) => {
 
     // Vérifier les permissions
     if (req.user.role === 'professor' && classItem.professor.toString() !== req.user._id.toString()) {
-      const course = await Course.findById(classItem.course);
-      if (!course || course.professor.toString() !== req.user._id.toString()) {
+      const group = await ClassGroup.findById(classItem.classGroupId).select('professorId');
+      if (!group || group.professorId.toString() !== req.user._id.toString()) {
         return res.status(403).json({ 
           success: false, 
           error: 'Vous ne pouvez marquer la présence que pour vos propres classes' 
@@ -869,7 +872,7 @@ const getLiveClasses = async (req, res) => {
       'schedule.endTime': { $gte: now }
     })
     .limit(parseInt(limit))
-    .populate('course', 'title')
+    .populate('classGroupId', 'name')
     .populate('professor', 'firstName lastName email')
     .sort({ 'schedule.startTime': 1 });
 
@@ -921,9 +924,8 @@ const getUpcomingClasses = async (req, res) => {
 
     const classes = await Class.find(query)
     .limit(parsedLimit)
-    .populate('course', 'title')
-    .populate('professor', 'firstName lastName email')
     .populate('classGroupId', 'name')
+    .populate('professor', 'firstName lastName email')
     .sort({ 'schedule.startTime': 1 });
 
     res.json({

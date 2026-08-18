@@ -28,9 +28,9 @@ const examSchema = new mongoose.Schema(
       enum: GERMAN_SUB_LEVELS,
       required: true
     },
-    courseId: {
+    classGroupId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Course',
+      ref: 'ClassGroup',
       default: null
     },
     createdBy: {

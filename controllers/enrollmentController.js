@@ -1,10 +1,14 @@
 const Enrollment = require('../models/Enrollment');
-const Course = require('../models/Course');
+const ClassGroup = require('../models/ClassGroup');
 const User = require('../models/User');
+const { ensureStudentInClassGroup } = require('../utils/groupEnrollment');
 
 function formatEnrollment(doc) {
   if (!doc) return null;
   const o = doc.toObject ? doc.toObject() : doc;
+  const groupId = o.classGroup?._id
+    ? o.classGroup._id.toString()
+    : o.classGroup?.toString?.();
   return {
     _id: o._id,
     student: o.student?._id ? o.student._id.toString() : o.student?.toString?.(),
@@ -16,14 +20,16 @@ function formatEnrollment(doc) {
           email: o.student.email,
         }
       : undefined,
-    course: o.course?._id ? o.course._id.toString() : o.course?.toString?.(),
-    courseDoc: o.course?._id
+    classGroupId: groupId,
+    classGroup: groupId,
+    classGroupDoc: o.classGroup?._id
       ? {
-          _id: o.course._id,
-          title: o.course.title,
-          language: o.course.language,
-          level: o.course.level,
-          cefrLevel: o.course.cefrLevel,
+          _id: o.classGroup._id,
+          name: o.classGroup.name,
+          languageId: o.classGroup.languageId,
+          levelId: o.classGroup.levelId,
+          level: o.classGroup.level,
+          subLevel: o.classGroup.subLevel,
         }
       : undefined,
     enrolledAt: o.enrolledAt,
@@ -34,9 +40,13 @@ function formatEnrollment(doc) {
   };
 }
 
-function canManageEnrollment(req, course) {
+function canManageEnrollment(req, group) {
   if (req.user.role === 'admin') return true;
-  if (req.user.role === 'professor' && course.professor.toString() === req.user._id.toString()) {
+  if (
+    req.user.role === 'professor' &&
+    group.professorId &&
+    group.professorId.toString() === req.user._id.toString()
+  ) {
     return true;
   }
   return false;
@@ -51,15 +61,16 @@ const listEnrollments = async (req, res) => {
 
     const filters = {};
     if (req.query.status) filters.status = req.query.status;
-    if (req.query.courseId) filters.course = req.query.courseId;
+    const classGroupId = req.query.classGroupId || req.query.courseId;
+    if (classGroupId) filters.classGroup = classGroupId;
 
     if (req.user.role === 'student') {
       filters.student = req.user._id;
     } else if (req.query.studentId) {
       filters.student = req.query.studentId;
     } else if (req.user.role === 'professor') {
-      const courses = await Course.find({ professor: req.user._id }).select('_id').lean();
-      filters.course = { $in: courses.map((c) => c._id) };
+      const groups = await ClassGroup.find({ professorId: req.user._id }).select('_id').lean();
+      filters.classGroup = { $in: groups.map((g) => g._id) };
     }
 
     const [rows, total] = await Promise.all([
@@ -68,7 +79,7 @@ const listEnrollments = async (req, res) => {
         .skip(skip)
         .limit(limit)
         .populate('student', 'firstName lastName email role')
-        .populate('course', 'title language level cefrLevel professor')
+        .populate('classGroup', 'name languageId levelId level subLevel professorId')
         .lean(),
       Enrollment.countDocuments(filters),
     ]);
@@ -83,55 +94,68 @@ const listEnrollments = async (req, res) => {
   }
 };
 
-// POST /api/enrollments — admin/prof enroll a student
+// POST /api/enrollments
 const createEnrollment = async (req, res) => {
   try {
-    const { studentId, courseId, status = 'active' } = req.body;
-    if (!studentId || !courseId) {
-      return res.status(400).json({ error: 'ValidationError', message: 'studentId and courseId are required' });
+    const {
+      studentId,
+      classGroupId,
+      courseId,
+      status = 'active',
+    } = req.body;
+    const groupId = classGroupId || courseId;
+    if (!studentId || !groupId) {
+      return res.status(400).json({
+        error: 'ValidationError',
+        message: 'studentId and classGroupId are required',
+      });
     }
 
-    const [student, course] = await Promise.all([
+    const [student, group] = await Promise.all([
       User.findById(studentId),
-      Course.findById(courseId),
+      ClassGroup.findById(groupId),
     ]);
 
     if (!student || student.role !== 'student') {
       return res.status(400).json({ error: 'ValidationError', message: 'Invalid student' });
     }
-    if (!course) {
-      return res.status(404).json({ error: 'NotFound', message: 'Course not found' });
+    if (!group) {
+      return res.status(404).json({ error: 'NotFound', message: 'Class group not found' });
     }
-    if (!canManageEnrollment(req, course)) {
-      return res.status(403).json({ error: 'Forbidden', message: 'Not allowed to enroll students in this course' });
+    if (!canManageEnrollment(req, group)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Not allowed to enroll students in this class group',
+      });
     }
 
     const existingActive = await Enrollment.findOne({
       student: studentId,
-      course: courseId,
+      classGroup: groupId,
       status: 'active',
     });
     if (existingActive) {
-      return res.status(400).json({ error: 'ValidationError', message: 'Student already has an active enrollment' });
+      return res.status(400).json({
+        error: 'ValidationError',
+        message: 'Student already has an active enrollment',
+      });
     }
 
-    const alreadyInCourse = course.enrolledStudents.some(
-      (e) => e.student.toString() === studentId.toString()
-    );
-    if (!alreadyInCourse) {
-      await course.enrollStudent(studentId);
-      await User.findByIdAndUpdate(studentId, { $addToSet: { 'studentInfo.enrolledCourses': courseId } });
+    await ensureStudentInClassGroup(studentId, group);
+
+    if (status !== 'active') {
+      await Enrollment.findOneAndUpdate(
+        { student: studentId, classGroup: groupId },
+        { status: ['active', 'completed', 'withdrawn', 'pending'].includes(status) ? status : 'active' }
+      );
     }
 
-    const enrollment = await Enrollment.create({
+    const populated = await Enrollment.findOne({
       student: studentId,
-      course: courseId,
-      status: ['active', 'completed', 'withdrawn', 'pending'].includes(status) ? status : 'active',
-    });
-
-    const populated = await Enrollment.findById(enrollment._id)
+      classGroup: groupId,
+    })
       .populate('student', 'firstName lastName email')
-      .populate('course', 'title language level cefrLevel')
+      .populate('classGroup', 'name languageId levelId level subLevel')
       .lean();
 
     res.status(201).json(formatEnrollment(populated));
@@ -147,14 +171,14 @@ const createEnrollment = async (req, res) => {
 // PATCH /api/enrollments/:id
 const updateEnrollment = async (req, res) => {
   try {
-    const enrollment = await Enrollment.findById(req.params.id).populate('course');
+    const enrollment = await Enrollment.findById(req.params.id).populate('classGroup');
     if (!enrollment) {
       return res.status(404).json({ error: 'NotFound', message: 'Enrollment not found' });
     }
 
-    const course = enrollment.course;
+    const group = enrollment.classGroup;
     const isOwner = enrollment.student.toString() === req.user._id.toString();
-    if (!isOwner && !canManageEnrollment(req, course)) {
+    if (!isOwner && !canManageEnrollment(req, group)) {
       return res.status(403).json({ error: 'Forbidden', message: 'Not allowed' });
     }
 
@@ -166,25 +190,39 @@ const updateEnrollment = async (req, res) => {
       enrollment.status = status;
 
       if (status === 'withdrawn' && req.user.role !== 'student') {
-        await course.unenrollStudent(enrollment.student);
-        await User.findByIdAndUpdate(enrollment.student, {
-          $pull: { 'studentInfo.enrolledCourses': course._id },
+        await ClassGroup.findByIdAndUpdate(group._id, {
+          $pull: { studentIds: enrollment.student },
         });
+        const student = await User.findById(enrollment.student).select(
+          'studentInfo.classGroupId'
+        );
+        const pullUpdate = {
+          $pull: { 'studentInfo.enrolledGroups': group._id },
+        };
+        if (
+          student?.studentInfo?.classGroupId &&
+          student.studentInfo.classGroupId.toString() === group._id.toString()
+        ) {
+          pullUpdate.$unset = { 'studentInfo.classGroupId': 1 };
+        }
+        await User.findByIdAndUpdate(enrollment.student, pullUpdate);
       }
     }
 
     if (progress !== undefined) {
       if (req.user.role === 'student') {
-        return res.status(403).json({ error: 'Forbidden', message: 'Students cannot update progress directly' });
+        return res.status(403).json({
+          error: 'Forbidden',
+          message: 'Students cannot update progress directly',
+        });
       }
       enrollment.progress = Math.min(100, Math.max(0, Number(progress) || 0));
-      await course.updateStudentProgress(enrollment.student, enrollment.progress);
     }
 
     await enrollment.save();
     const populated = await Enrollment.findById(enrollment._id)
       .populate('student', 'firstName lastName email')
-      .populate('course', 'title language level cefrLevel')
+      .populate('classGroup', 'name languageId levelId level subLevel')
       .lean();
 
     res.json(formatEnrollment(populated));
@@ -194,4 +232,9 @@ const updateEnrollment = async (req, res) => {
   }
 };
 
-module.exports = { listEnrollments, createEnrollment, updateEnrollment, formatEnrollment };
+module.exports = {
+  listEnrollments,
+  createEnrollment,
+  updateEnrollment,
+  formatEnrollment,
+};

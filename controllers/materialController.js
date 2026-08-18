@@ -3,7 +3,7 @@ const fs = require('fs');
 const Material = require('../models/Material');
 const Chapter = require('../models/Chapter');
 const Book = require('../models/Book');
-const Course = require('../models/Course');
+const ClassGroup = require('../models/ClassGroup');
 const { MATERIAL_TYPES } = require('../models/Material');
 const {
   buildSignedFileUrl,
@@ -32,7 +32,8 @@ function formatMaterial(doc) {
     externalUrl: o.externalUrl,
     language: o.language,
     level: o.level,
-    course: o.course,
+    classGroup: o.classGroup,
+    classGroupId: o.classGroup,
     book: o.book,
     chapter: o.chapter,
     duration: o.duration,
@@ -51,27 +52,31 @@ async function canAccessMaterial(req, material) {
   if (req.user.role === 'admin') return true;
   if (!material.active) return false;
 
-  if (material.course) {
-    const course = await Course.findById(material.course).select('professor enrolledStudents');
-    if (!course) return false;
-    if (course.professor.toString() === req.user._id.toString()) return true;
-    return course.enrolledStudents.some((e) => e.student?.toString() === req.user._id.toString());
+  if (material.classGroup) {
+    const group = await ClassGroup.findById(material.classGroup).select(
+      'professorId studentIds'
+    );
+    if (!group) return false;
+    if (group.professorId?.toString() === req.user._id.toString()) return true;
+    return (group.studentIds || []).some(
+      (id) => id?.toString() === req.user._id.toString()
+    );
   }
 
   if (material.book) {
     const book = await Book.findById(material.book).select('status active');
     if (!book || book.status !== 'published' || !book.active) return false;
     if (req.user.role === 'student') {
-      const enrolled = await Course.findOne({
+      const enrolled = await ClassGroup.findOne({
         bookId: material.book,
-        'enrolledStudents.student': req.user._id,
+        studentIds: req.user._id,
       }).select('_id');
       return !!enrolled;
     }
     if (req.user.role === 'professor') {
-      const teaches = await Course.findOne({
+      const teaches = await ClassGroup.findOne({
         bookId: material.book,
-        professor: req.user._id,
+        professorId: req.user._id,
       }).select('_id');
       return !!teaches;
     }
@@ -87,7 +92,9 @@ const listMaterials = async (req, res) => {
     const filters = {};
     if (req.query.bookId) filters.book = req.query.bookId;
     if (req.query.chapterId) filters.chapter = req.query.chapterId;
-    if (req.query.courseId) filters.course = req.query.courseId;
+    if (req.query.classGroupId || req.query.courseId) {
+      filters.classGroup = req.query.classGroupId || req.query.courseId;
+    }
     if (req.query.type) filters.type = req.query.type;
     if (req.user?.role !== 'admin') filters.active = true;
 
@@ -108,6 +115,7 @@ const createMaterial = async (req, res) => {
       externalUrl,
       languageId,
       levelId,
+      classGroupId,
       courseId,
       bookId,
       chapterId,
@@ -115,6 +123,7 @@ const createMaterial = async (req, res) => {
       transcript,
       order = 0,
     } = req.body;
+    const groupId = classGroupId || courseId;
 
     if (!type || !MATERIAL_TYPES.includes(type)) {
       return res.status(400).json({ error: 'ValidationError', message: `type must be one of: ${MATERIAL_TYPES.join(', ')}` });
@@ -136,7 +145,7 @@ const createMaterial = async (req, res) => {
           /[^a-zA-Z0-9._-]/g,
           '_'
         );
-        const key = `materials/${folder}/${bookId || courseId || 'misc'}/${Date.now()}-${safeName}`;
+        const key = `materials/${folder}/${bookId || groupId || 'misc'}/${Date.now()}-${safeName}`;
         await uploadLocalFileToObjectStorage({
           localPath: req.file.path,
           key,
@@ -178,7 +187,7 @@ const createMaterial = async (req, res) => {
       externalUrl: externalUrl || null,
       language: languageId || null,
       level: levelId || null,
-      course: courseId || null,
+      classGroup: groupId || null,
       book: bookId || null,
       chapter: chapterId || null,
       duration: duration != null ? Number(duration) : null,

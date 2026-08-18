@@ -19,9 +19,9 @@ const documentSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  course: {
+  classGroup: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Course',
+    ref: 'ClassGroup',
     required: true
   },
   uploadedBy: {
@@ -33,6 +33,6 @@ const documentSchema = new mongoose.Schema({
   timestamps: true
 });
 
-documentSchema.index({ course: 1 });
+documentSchema.index({ classGroup: 1 });
 
 module.exports = mongoose.model('Document', documentSchema);

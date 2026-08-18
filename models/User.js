@@ -126,9 +126,9 @@ const userSchema = new mongoose.Schema({
         enum: ['beginner', 'intermediate', 'advanced']
       }
     }],
-    enrolledCourses: [{
+    enrolledGroups: [{
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Course'
+      ref: 'ClassGroup'
     }],
     gamification: {
       totalXp: { type: Number, default: 0 },
@@ -173,11 +173,7 @@ const userSchema = new mongoose.Schema({
     education: {
       type: String,
       maxlength: [200, 'L\'éducation ne peut pas dépasser 200 caractères']
-    },
-    courses: [{
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Course'
-    }]
+    }
   },
 
   // Authentification et sécurité
@@ -226,8 +222,8 @@ const userSchema = new mongoose.Schema({
 
 // Index pour améliorer les performances
 userSchema.index({ role: 1, status: 1 });
-userSchema.index({ 'studentInfo.enrolledCourses': 1 });
-userSchema.index({ 'professorInfo.courses': 1 });
+userSchema.index({ 'studentInfo.enrolledGroups': 1 });
+userSchema.index({ 'studentInfo.classGroupId': 1 });
 
 // Virtual pour le nom complet
 userSchema.virtual('fullName').get(function() {

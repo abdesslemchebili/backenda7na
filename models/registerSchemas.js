@@ -3,7 +3,6 @@
  * Évite MissingSchemaError en production si une route n'a pas encore chargé le modèle.
  */
 require('./User');
-require('./Course');
 require('./Class');
 require('./ClassGroup');
 require('./Chapter');
@@ -33,5 +32,8 @@ require('./AuditLog');
 require('./PracticePack');
 require('./GroupChallenge');
 require('./PracticeScore');
+require('./BookBookmark');
+require('./BookReadingProgress');
+require('./BookPageMetadata');
 
 module.exports = {};

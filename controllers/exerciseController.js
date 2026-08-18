@@ -1,12 +1,12 @@
 const { Exercise, ExerciseSubmission } = require('../models/Exercise');
 const Book = require('../models/Book');
-const Course = require('../models/Course');
+const ClassGroup = require('../models/ClassGroup');
 const Chapter = require('../models/Chapter');
 const { pickLocalizedTitle } = require('./bookController');
 const { scoreExercise } = require('../utils/exerciseScoring');
 const { notifyUser } = require('../utils/notifyUser');
 const { awardGamification, XP_REWARDS } = require('../utils/gamificationHelper');
-const { syncCourseChapterProgress } = require('../utils/chapterProgressHelper');
+const { syncGroupChapterProgress } = require('../utils/chapterProgressHelper');
 
 function formatExercise(doc, includeAnswers = false) {
   if (!doc) return null;
@@ -29,7 +29,8 @@ function formatExercise(doc, includeAnswers = false) {
     displayTitle: pickLocalizedTitle(o.title),
     book: o.book,
     chapter: o.chapter,
-    course: o.course,
+    classGroup: o.classGroup,
+    classGroupId: o.classGroup,
     order: o.order,
     questions,
     passingScore: o.passingScore,
@@ -69,25 +70,32 @@ async function canAccessExercise(req, exercise) {
   if (req.user.role === 'admin') return true;
   if (!exercise.active) return false;
 
-  if (exercise.course) {
-    const course = await Course.findById(exercise.course).select('professor enrolledStudents');
-    if (!course) return false;
-    if (course.professor.toString() === req.user._id.toString()) return true;
-    return course.enrolledStudents.some((e) => e.student?.toString() === req.user._id.toString());
+  if (exercise.classGroup) {
+    const group = await ClassGroup.findById(exercise.classGroup).select(
+      'professorId studentIds'
+    );
+    if (!group) return false;
+    if (group.professorId?.toString() === req.user._id.toString()) return true;
+    return (group.studentIds || []).some(
+      (id) => id?.toString() === req.user._id.toString()
+    );
   }
 
   const book = await Book.findById(exercise.book).select('status active');
   if (!book || book.status !== 'published' || !book.active) return false;
 
   if (req.user.role === 'professor') {
-    const ownsCourse = await Course.findOne({ bookId: exercise.book, professor: req.user._id }).select('_id');
-    return !!ownsCourse;
+    const owns = await ClassGroup.findOne({
+      bookId: exercise.book,
+      professorId: req.user._id,
+    }).select('_id');
+    return !!owns;
   }
 
   if (req.user.role === 'student') {
-    const enrolled = await Course.findOne({
+    const enrolled = await ClassGroup.findOne({
       bookId: exercise.book,
-      'enrolledStudents.student': req.user._id,
+      studentIds: req.user._id,
     }).select('_id');
     return !!enrolled;
   }
@@ -99,8 +107,11 @@ async function canManageExercise(req, exercise) {
   if (req.user.role === 'admin') return true;
   if (req.user.role !== 'professor') return false;
   if (exercise.createdBy?.toString() === req.user._id.toString()) return true;
-  const ownsCourse = await Course.findOne({ bookId: exercise.book, professor: req.user._id }).select('_id');
-  return !!ownsCourse;
+  const owns = await ClassGroup.findOne({
+    bookId: exercise.book,
+    professorId: req.user._id,
+  }).select('_id');
+  return !!owns;
 }
 
 // GET /api/exercises
@@ -109,7 +120,9 @@ const listExercises = async (req, res) => {
     const filters = {};
     if (req.query.bookId) filters.book = req.query.bookId;
     if (req.query.chapterId) filters.chapter = req.query.chapterId;
-    if (req.query.courseId) filters.course = req.query.courseId;
+    if (req.query.classGroupId || req.query.courseId) {
+      filters.classGroup = req.query.classGroupId || req.query.courseId;
+    }
     if (req.user?.role !== 'admin') filters.active = true;
 
     const exercises = await Exercise.find(filters).sort({ order: 1, createdAt: 1 }).lean();
@@ -153,7 +166,8 @@ const getExercise = async (req, res) => {
 // POST /api/exercises
 const createExercise = async (req, res) => {
   try {
-    const { title, bookId, chapterId, courseId, order, questions, passingScore, maxAttempts } = req.body;
+    const { title, bookId, chapterId, classGroupId, courseId, order, questions, passingScore, maxAttempts } = req.body;
+    const groupId = classGroupId || courseId;
 
     if (!bookId || !chapterId) {
       return res.status(400).json({ error: 'ValidationError', message: 'bookId and chapterId are required' });
@@ -182,7 +196,7 @@ const createExercise = async (req, res) => {
       title: titleObj,
       book: bookId,
       chapter: chapterId,
-      course: courseId || null,
+      classGroup: groupId || null,
       order: order ?? 0,
       questions: qs,
       passingScore: passingScore ?? 60,
@@ -314,16 +328,16 @@ const submitExercise = async (req, res) => {
     }
 
     let progressUpdate = null;
-    let courseId = exercise.course;
-    if (!courseId && exercise.book) {
-      const linked = await Course.findOne({
+    let groupId = exercise.classGroup;
+    if (!groupId && exercise.book) {
+      const linked = await ClassGroup.findOne({
         bookId: exercise.book,
-        'enrolledStudents.student': req.user._id,
+        studentIds: req.user._id,
       }).select('_id');
-      courseId = linked?._id;
+      groupId = linked?._id;
     }
-    if (courseId) {
-      progressUpdate = await syncCourseChapterProgress(req.user._id, courseId);
+    if (groupId) {
+      progressUpdate = await syncGroupChapterProgress(req.user._id, groupId);
     }
 
     res.json({

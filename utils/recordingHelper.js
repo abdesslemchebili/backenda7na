@@ -1,6 +1,5 @@
 const Recording = require('../models/Recording');
-const Class = require('../models/Class');
-const Course = require('../models/Course');
+const ClassGroup = require('../models/ClassGroup');
 const { buildSignedFileUrl, getSignedUrlExpiryIso } = require('./fileAccess');
 
 function formatRecording(doc) {
@@ -30,10 +29,19 @@ async function canAccessSessionRecording(req, classItem) {
   if (classItem.professor.toString() === req.user._id.toString()) return true;
 
   if (req.user.role === 'student') {
-    const course = await Course.findById(classItem.course).select('enrolledStudents');
-    if (!course) return false;
-    return course.enrolledStudents.some((e) => e.student?.toString() === req.user._id.toString());
+    if (!classItem.classGroupId) return false;
+    const group = await ClassGroup.findById(classItem.classGroupId).select('studentIds');
+    if (!group) return false;
+    return (group.studentIds || []).some(
+      (id) => id?.toString() === req.user._id.toString()
+    );
   }
+
+  if (req.user.role === 'professor' && classItem.classGroupId) {
+    const group = await ClassGroup.findById(classItem.classGroupId).select('professorId');
+    return group?.professorId?.toString() === req.user._id.toString();
+  }
+
   return false;
 }
 
@@ -46,7 +54,9 @@ async function upsertSessionRecording(sessionId, payload, userId) {
   if (externalUrl !== undefined) data.externalUrl = externalUrl || null;
   if (storageUrl !== undefined) data.storageUrl = storageUrl || null;
   if (egressId !== undefined) data.egressId = egressId || null;
-  if (durationSeconds !== undefined) data.durationSeconds = durationSeconds != null ? Number(durationSeconds) : null;
+  if (durationSeconds !== undefined) {
+    data.durationSeconds = durationSeconds != null ? Number(durationSeconds) : null;
+  }
   if (failureReason !== undefined) data.failureReason = failureReason || null;
 
   if (status) {

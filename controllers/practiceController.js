@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
-const Course = require('../models/Course');
 const ClassGroup = require('../models/ClassGroup');
+const Language = require('../models/Language');
 const User = require('../models/User');
 const PracticePack = require('../models/PracticePack');
 const GroupChallenge = require('../models/GroupChallenge');
@@ -17,66 +17,62 @@ const {
 } = require('../utils/aiPractice');
 const { GERMAN_SUB_LEVELS } = require('../constants/germanLevels');
 
-function isEnrolled(course, userId) {
-  return (course.enrolledStudents || []).some(
-    (e) => e.student?.toString() === userId.toString()
+function isGroupMember(group, userId) {
+  return (group.studentIds || []).some(
+    (id) => id?.toString() === userId.toString()
   );
 }
 
-async function loadCourseAccess(req, courseId) {
-  const course = await Course.findById(courseId)
-    .select('title language cefrLevel professor enrolledStudents bookId')
+async function loadGroupAccess(req, classGroupId) {
+  const group = await ClassGroup.findById(classGroupId)
+    .select('name languageId levelId level subLevel professorId studentIds bookId')
     .lean();
-  if (!course) return { error: { status: 404, body: { error: 'NotFound', message: 'Course not found' } } };
+  if (!group) {
+    return {
+      error: {
+        status: 404,
+        body: { error: 'NotFound', message: 'Class group not found' },
+      },
+    };
+  }
 
   const uid = req.user._id.toString();
   const role = req.user.role;
-  if (role === 'admin') return { course };
-  if (role === 'professor' && course.professor?.toString() === uid) return { course };
-  if (role === 'student' && isEnrolled(course, uid)) return { course };
+  if (role === 'admin') return { group };
+  if (role === 'professor' && group.professorId?.toString() === uid) return { group };
+  if (role === 'student' && isGroupMember(group, uid)) return { group };
 
-  return { error: { status: 403, body: { error: 'Forbidden', message: 'Not allowed for this course' } } };
+  return {
+    error: {
+      status: 403,
+      body: { error: 'Forbidden', message: 'Not allowed for this class group' },
+    },
+  };
 }
 
-async function resolveLevelContext(req, course) {
-  const languageCode = courseLanguageToCode(course.language);
+async function resolveLevelContext(group) {
+  let languageCode = 'de';
+  if (group.languageId) {
+    const lang = await Language.findById(group.languageId).select('code').lean();
+    if (lang?.code) {
+      languageCode = courseLanguageToCode(lang.code);
+    }
+  }
+
   let subLevel = null;
-  let classGroupId = null;
-
-  if (req.user.role === 'student') {
-    const user = await User.findById(req.user._id).select('studentInfo.classGroupId').lean();
-    classGroupId = user?.studentInfo?.classGroupId || null;
-    if (classGroupId) {
-      const group = await ClassGroup.findById(classGroupId).select('subLevel courseId studentIds').lean();
-      if (group?.subLevel && GERMAN_SUB_LEVELS.includes(group.subLevel)) {
-        subLevel = group.subLevel;
-      }
-      if (group && (!group.courseId || group.courseId.toString() === course._id.toString())) {
-        classGroupId = group._id;
-      }
-    }
+  if (group.subLevel && GERMAN_SUB_LEVELS.includes(group.subLevel)) {
+    subLevel = group.subLevel;
+  } else if (group.level) {
+    subLevel = cefrToDefaultSubLevel(group.level);
+  } else {
+    subLevel = 'A1.1';
   }
 
-  if (!subLevel && req.user.role !== 'student') {
-    const group = await ClassGroup.findOne({
-      courseId: course._id,
-      status: 'active',
-      subLevel: { $in: GERMAN_SUB_LEVELS },
-    })
-      .sort({ updatedAt: -1 })
-      .select('subLevel')
-      .lean();
-    if (group?.subLevel) {
-      subLevel = group.subLevel;
-      classGroupId = group._id;
-    }
-  }
-
-  if (!subLevel) {
-    subLevel = cefrToDefaultSubLevel(course.cefrLevel);
-  }
-
-  return { languageCode, subLevel, classGroupId };
+  return {
+    languageCode,
+    subLevel,
+    classGroupId: group._id,
+  };
 }
 
 function challengeEndsAt(from = new Date()) {
@@ -85,10 +81,10 @@ function challengeEndsAt(from = new Date()) {
   return end;
 }
 
-async function ensureOpenChallenge({ courseId, classGroupId, packId, createdBy = null }) {
+async function ensureOpenChallenge({ classGroupId, packId, createdBy = null }) {
   const now = new Date();
   let challenge = await GroupChallenge.findOne({
-    courseId,
+    classGroupId,
     status: 'open',
     $or: [{ endsAt: null }, { endsAt: { $gt: now } }],
   }).sort({ startsAt: -1 });
@@ -96,8 +92,7 @@ async function ensureOpenChallenge({ courseId, classGroupId, packId, createdBy =
   if (challenge) return challenge;
 
   challenge = await GroupChallenge.create({
-    courseId,
-    classGroupId: classGroupId || null,
+    classGroupId,
     packId,
     title: 'Défi de cohorte',
     status: 'open',
@@ -112,10 +107,11 @@ async function ensureOpenChallenge({ courseId, classGroupId, packId, createdBy =
 function formatChallenge(doc, pack = null) {
   if (!doc) return null;
   const o = doc.toObject ? doc.toObject() : { ...doc };
-  const participants = [...(o.participants || [])].sort((a, b) => (b.score || 0) - (a.score || 0));
+  const participants = [...(o.participants || [])].sort(
+    (a, b) => (b.score || 0) - (a.score || 0)
+  );
   return {
     _id: o._id,
-    courseId: o.courseId,
     classGroupId: o.classGroupId,
     packId: o.packId,
     pack: pack ? formatPackForClient(pack, { includeAnswers: false }) : undefined,
@@ -132,13 +128,14 @@ function formatChallenge(doc, pack = null) {
   };
 }
 
-// GET /api/practice/course/:courseId
-const getCoursePractice = async (req, res) => {
+// GET /api/practice/group/:classGroupId
+const getGroupPractice = async (req, res) => {
   try {
-    const access = await loadCourseAccess(req, req.params.courseId);
+    const classGroupId = req.params.classGroupId || req.params.courseId;
+    const access = await loadGroupAccess(req, classGroupId);
     if (access.error) return res.status(access.error.status).json(access.error.body);
 
-    const level = await resolveLevelContext(req, access.course);
+    const level = await resolveLevelContext(access.group);
     const packs = await PracticePack.find({
       languageCode: level.languageCode,
       subLevel: level.subLevel,
@@ -161,18 +158,22 @@ const getCoursePractice = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('getCoursePractice:', err);
+    console.error('getGroupPractice:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err.message });
   }
 };
 
-// POST /api/practice/course/:courseId/ensure
-const ensureCoursePractice = async (req, res) => {
+/** @deprecated alias */
+const getCoursePractice = getGroupPractice;
+
+// POST /api/practice/group/:classGroupId/ensure
+const ensureGroupPractice = async (req, res) => {
   try {
-    const access = await loadCourseAccess(req, req.params.courseId);
+    const classGroupId = req.params.classGroupId || req.params.courseId;
+    const access = await loadGroupAccess(req, classGroupId);
     if (access.error) return res.status(access.error.status).json(access.error.body);
 
-    const level = await resolveLevelContext(req, access.course);
+    const level = await resolveLevelContext(access.group);
     const packs = await ensurePacksForLevel({
       languageCode: level.languageCode,
       subLevel: level.subLevel,
@@ -182,8 +183,7 @@ const ensureCoursePractice = async (req, res) => {
     let challenge = null;
     if (quizPack) {
       challenge = await ensureOpenChallenge({
-        courseId: access.course._id,
-        classGroupId: level.classGroupId,
+        classGroupId: access.group._id,
         packId: quizPack._id,
         createdBy: req.user._id,
       });
@@ -199,12 +199,14 @@ const ensureCoursePractice = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('ensureCoursePractice:', err);
+    console.error('ensureGroupPractice:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err.message });
   }
 };
 
-// GET /api/practice/packs/:id
+/** @deprecated alias */
+const ensureCoursePractice = ensureGroupPractice;
+
 const getPack = async (req, res) => {
   try {
     const pack = await PracticePack.findById(req.params.id).lean();
@@ -218,15 +220,18 @@ const getPack = async (req, res) => {
   }
 };
 
-// POST /api/practice/packs/:id/submit
 const submitPack = async (req, res) => {
   try {
-    const { courseId, answers, score: clientScore } = req.body || {};
-    if (!courseId) {
-      return res.status(400).json({ error: 'ValidationError', message: 'courseId is required' });
+    const { classGroupId, courseId, answers, score: clientScore } = req.body || {};
+    const groupId = classGroupId || courseId;
+    if (!groupId) {
+      return res.status(400).json({
+        error: 'ValidationError',
+        message: 'classGroupId is required',
+      });
     }
 
-    const access = await loadCourseAccess(req, courseId);
+    const access = await loadGroupAccess(req, groupId);
     if (access.error) return res.status(access.error.status).json(access.error.body);
     if (req.user.role !== 'student' && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Forbidden', message: 'Students only' });
@@ -248,7 +253,7 @@ const submitPack = async (req, res) => {
     const xpEarned = Math.max(1, Math.round((baseXp * result.score) / 100));
 
     await PracticeScore.create({
-      courseId,
+      classGroupId: groupId,
       studentId: req.user._id,
       packId: pack._id,
       kind: pack.kind,
@@ -276,15 +281,15 @@ const submitPack = async (req, res) => {
   }
 };
 
-// GET /api/practice/course/:courseId/leaderboard
 const getLeaderboard = async (req, res) => {
   try {
-    const access = await loadCourseAccess(req, req.params.courseId);
+    const classGroupId = req.params.classGroupId || req.params.courseId;
+    const access = await loadGroupAccess(req, classGroupId);
     if (access.error) return res.status(access.error.status).json(access.error.body);
 
-    const courseObjectId = new mongoose.Types.ObjectId(String(access.course._id));
+    const groupObjectId = new mongoose.Types.ObjectId(String(access.group._id));
     const rows = await PracticeScore.aggregate([
-      { $match: { courseId: courseObjectId } },
+      { $match: { classGroupId: groupObjectId } },
       {
         $group: {
           _id: '$studentId',
@@ -324,13 +329,13 @@ const getLeaderboard = async (req, res) => {
   }
 };
 
-// GET /api/practice/course/:courseId/challenges
 const listChallenges = async (req, res) => {
   try {
-    const access = await loadCourseAccess(req, req.params.courseId);
+    const classGroupId = req.params.classGroupId || req.params.courseId;
+    const access = await loadGroupAccess(req, classGroupId);
     if (access.error) return res.status(access.error.status).json(access.error.body);
 
-    const level = await resolveLevelContext(req, access.course);
+    const level = await resolveLevelContext(access.group);
     const packs = await ensurePacksForLevel({
       languageCode: level.languageCode,
       subLevel: level.subLevel,
@@ -338,13 +343,12 @@ const listChallenges = async (req, res) => {
     const quizPack = packs.find((p) => p.kind === 'quiz');
     if (quizPack) {
       await ensureOpenChallenge({
-        courseId: access.course._id,
-        classGroupId: level.classGroupId,
+        classGroupId: access.group._id,
         packId: quizPack._id,
       });
     }
 
-    const challenges = await GroupChallenge.find({ courseId: access.course._id })
+    const challenges = await GroupChallenge.find({ classGroupId: access.group._id })
       .sort({ startsAt: -1 })
       .limit(20)
       .lean();
@@ -362,7 +366,10 @@ const listChallenges = async (req, res) => {
       .select('firstName lastName')
       .lean();
     const studentMap = Object.fromEntries(
-      students.map((s) => [String(s._id), `${s.firstName || ''} ${s.lastName || ''}`.trim()])
+      students.map((s) => [
+        String(s._id),
+        `${s.firstName || ''} ${s.lastName || ''}`.trim(),
+      ])
     );
 
     res.json({
@@ -381,16 +388,16 @@ const listChallenges = async (req, res) => {
   }
 };
 
-// POST /api/practice/course/:courseId/challenges
 const createChallenge = async (req, res) => {
   try {
-    const access = await loadCourseAccess(req, req.params.courseId);
+    const classGroupId = req.params.classGroupId || req.params.courseId;
+    const access = await loadGroupAccess(req, classGroupId);
     if (access.error) return res.status(access.error.status).json(access.error.body);
     if (!['professor', 'admin'].includes(req.user.role)) {
       return res.status(403).json({ error: 'Forbidden', message: 'Professor or admin only' });
     }
 
-    const level = await resolveLevelContext(req, access.course);
+    const level = await resolveLevelContext(access.group);
     const kind = req.body?.kind || 'quiz';
     const pack = await generateAndStorePack({
       languageCode: level.languageCode,
@@ -400,13 +407,12 @@ const createChallenge = async (req, res) => {
     });
 
     await GroupChallenge.updateMany(
-      { courseId: access.course._id, status: 'open' },
+      { classGroupId: access.group._id, status: 'open' },
       { $set: { status: 'closed', endsAt: new Date() } }
     );
 
     const challenge = await GroupChallenge.create({
-      courseId: access.course._id,
-      classGroupId: level.classGroupId,
+      classGroupId: access.group._id,
       packId: pack._id,
       title: req.body?.title || 'Défi de cohorte',
       status: 'open',
@@ -423,7 +429,6 @@ const createChallenge = async (req, res) => {
   }
 };
 
-// POST /api/practice/challenges/:id/join
 const joinChallenge = async (req, res) => {
   try {
     const challenge = await GroupChallenge.findById(req.params.id);
@@ -432,7 +437,7 @@ const joinChallenge = async (req, res) => {
       return res.status(400).json({ error: 'ValidationError', message: 'Challenge is closed' });
     }
 
-    const access = await loadCourseAccess(req, challenge.courseId);
+    const access = await loadGroupAccess(req, challenge.classGroupId);
     if (access.error) return res.status(access.error.status).json(access.error.body);
     if (req.user.role !== 'student') {
       return res.status(403).json({ error: 'Forbidden', message: 'Students only' });
@@ -458,7 +463,6 @@ const joinChallenge = async (req, res) => {
   }
 };
 
-// POST /api/practice/challenges/:id/submit
 const submitChallenge = async (req, res) => {
   try {
     const challenge = await GroupChallenge.findById(req.params.id);
@@ -472,7 +476,7 @@ const submitChallenge = async (req, res) => {
       return res.status(400).json({ error: 'ValidationError', message: 'Challenge expired' });
     }
 
-    const access = await loadCourseAccess(req, challenge.courseId);
+    const access = await loadGroupAccess(req, challenge.classGroupId);
     if (access.error) return res.status(access.error.status).json(access.error.body);
     if (req.user.role !== 'student') {
       return res.status(403).json({ error: 'Forbidden', message: 'Students only' });
@@ -509,7 +513,7 @@ const submitChallenge = async (req, res) => {
     await challenge.save();
 
     await PracticeScore.create({
-      courseId: challenge.courseId,
+      classGroupId: challenge.classGroupId,
       studentId: req.user._id,
       packId: pack._id,
       kind: pack.kind,
@@ -540,7 +544,9 @@ const submitChallenge = async (req, res) => {
 };
 
 module.exports = {
+  getGroupPractice,
   getCoursePractice,
+  ensureGroupPractice,
   ensureCoursePractice,
   getPack,
   submitPack,

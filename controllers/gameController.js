@@ -1,11 +1,11 @@
 const { LearningGame, GamePlay } = require('../models/LearningGame');
 const Book = require('../models/Book');
-const Course = require('../models/Course');
+const ClassGroup = require('../models/ClassGroup');
 const Chapter = require('../models/Chapter');
 const { pickLocalizedTitle } = require('./bookController');
 const { GAME_TYPES } = require('../constants/gamification');
 const { awardGamification } = require('../utils/gamificationHelper');
-const { syncCourseChapterProgress } = require('../utils/chapterProgressHelper');
+const { syncGroupChapterProgress } = require('../utils/chapterProgressHelper');
 
 function formatGame(doc) {
   if (!doc) return null;
@@ -17,7 +17,8 @@ function formatGame(doc) {
     type: o.type,
     book: o.book,
     chapter: o.chapter,
-    course: o.course,
+    classGroup: o.classGroup,
+    classGroupId: o.classGroup,
     items: o.items,
     order: o.order,
     xpReward: o.xpReward,
@@ -50,25 +51,32 @@ async function canAccessGame(req, game) {
   if (req.user.role === 'admin') return true;
   if (!game.active) return false;
 
-  if (game.course) {
-    const course = await Course.findById(game.course).select('professor enrolledStudents');
-    if (!course) return false;
-    if (course.professor.toString() === req.user._id.toString()) return true;
-    return course.enrolledStudents.some((e) => e.student?.toString() === req.user._id.toString());
+  if (game.classGroup) {
+    const group = await ClassGroup.findById(game.classGroup).select(
+      'professorId studentIds'
+    );
+    if (!group) return false;
+    if (group.professorId?.toString() === req.user._id.toString()) return true;
+    return (group.studentIds || []).some(
+      (id) => id?.toString() === req.user._id.toString()
+    );
   }
 
   const book = await Book.findById(game.book).select('status active');
   if (!book || book.status !== 'published' || !book.active) return false;
 
   if (req.user.role === 'professor') {
-    const owns = await Course.findOne({ bookId: game.book, professor: req.user._id }).select('_id');
+    const owns = await ClassGroup.findOne({
+      bookId: game.book,
+      professorId: req.user._id,
+    }).select('_id');
     return !!owns;
   }
 
   if (req.user.role === 'student') {
-    const enrolled = await Course.findOne({
+    const enrolled = await ClassGroup.findOne({
       bookId: game.book,
-      'enrolledStudents.student': req.user._id,
+      studentIds: req.user._id,
     }).select('_id');
     return !!enrolled;
   }
@@ -80,7 +88,10 @@ async function canManageGame(req, game) {
   if (req.user.role === 'admin') return true;
   if (req.user.role !== 'professor') return false;
   if (game.createdBy?.toString() === req.user._id.toString()) return true;
-  const owns = await Course.findOne({ bookId: game.book, professor: req.user._id }).select('_id');
+  const owns = await ClassGroup.findOne({
+    bookId: game.book,
+    professorId: req.user._id,
+  }).select('_id');
   return !!owns;
 }
 
@@ -90,7 +101,9 @@ const listGames = async (req, res) => {
     const filters = {};
     if (req.query.bookId) filters.book = req.query.bookId;
     if (req.query.chapterId) filters.chapter = req.query.chapterId;
-    if (req.query.courseId) filters.course = req.query.courseId;
+    if (req.query.classGroupId || req.query.courseId) {
+      filters.classGroup = req.query.classGroupId || req.query.courseId;
+    }
     if (req.query.type) filters.type = req.query.type;
     if (req.user?.role !== 'admin') filters.active = true;
 
@@ -130,7 +143,8 @@ const getGame = async (req, res) => {
 // POST /api/games
 const createGame = async (req, res) => {
   try {
-    const { title, type, bookId, chapterId, courseId, items, order, xpReward } = req.body;
+    const { title, type, bookId, chapterId, classGroupId, courseId, items, order, xpReward } = req.body;
+    const groupId = classGroupId || courseId;
 
     if (!bookId || !chapterId) {
       return res.status(400).json({ error: 'ValidationError', message: 'bookId and chapterId are required' });
@@ -156,7 +170,7 @@ const createGame = async (req, res) => {
       type: type || 'word_match',
       book: bookId,
       chapter: chapterId,
-      course: courseId || null,
+      classGroup: groupId || null,
       items,
       order: order ?? 0,
       xpReward: xpReward ?? 10,
@@ -249,16 +263,16 @@ const playGame = async (req, res) => {
     });
 
     let progressUpdate = null;
-    let courseId = game.course;
-    if (!courseId && game.book) {
-      const linked = await Course.findOne({
+    let groupId = game.classGroup;
+    if (!groupId && game.book) {
+      const linked = await ClassGroup.findOne({
         bookId: game.book,
-        'enrolledStudents.student': req.user._id,
+        studentIds: req.user._id,
       }).select('_id');
-      courseId = linked?._id;
+      groupId = linked?._id;
     }
-    if (courseId) {
-      progressUpdate = await syncCourseChapterProgress(req.user._id, courseId);
+    if (groupId) {
+      progressUpdate = await syncGroupChapterProgress(req.user._id, groupId);
     }
 
     res.json({

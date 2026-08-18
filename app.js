@@ -73,7 +73,6 @@ app.get(
 app.use('/api/files', require('./routes/files'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
-app.use('/api/courses', require('./routes/courses'));
 app.use('/api/classes', require('./routes/classes'));
 app.use('/api/applications', require('./routes/applications'));
 app.use('/api', require('./routes/documents'));

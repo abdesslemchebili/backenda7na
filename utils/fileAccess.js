@@ -80,5 +80,6 @@ module.exports = {
   verifyFileAccessToken,
   buildSignedFileUrl,
   getSignedUrlExpiryIso,
+  getApiBaseUrl,
   DEFAULT_TTL
 };

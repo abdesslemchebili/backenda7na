@@ -2,9 +2,9 @@ const mongoose = require('mongoose');
 
 const practiceScoreSchema = new mongoose.Schema(
   {
-    courseId: {
+    classGroupId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Course',
+      ref: 'ClassGroup',
       required: true,
     },
     studentId: {
@@ -33,7 +33,7 @@ const practiceScoreSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-practiceScoreSchema.index({ courseId: 1, studentId: 1, createdAt: -1 });
-practiceScoreSchema.index({ courseId: 1, score: -1 });
+practiceScoreSchema.index({ classGroupId: 1, studentId: 1, createdAt: -1 });
+practiceScoreSchema.index({ classGroupId: 1, score: -1 });
 
 module.exports = mongoose.model('PracticeScore', practiceScoreSchema);

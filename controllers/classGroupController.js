@@ -1,5 +1,7 @@
 const ClassGroup = require('../models/ClassGroup');
-const Course = require('../models/Course');
+const Language = require('../models/Language');
+const Level = require('../models/Level');
+const Book = require('../models/Book');
 const User = require('../models/User');
 const { syncClassGroupStudents } = require('../utils/studentClassVisibility');
 
@@ -28,12 +30,28 @@ function formatLeanGroup(g) {
   if (!g) return null;
   const prof = g.professorId;
   const studs = g.studentIds || [];
-  const course = g.courseId && g.courseId._id
+
+  const language = g.languageId && g.languageId._id
     ? {
-        _id: g.courseId._id,
-        title: g.courseId.title,
-        language: g.courseId.language,
-        level: g.courseId.level
+        _id: g.languageId._id,
+        name: g.languageId.name,
+        code: g.languageId.code,
+        nativeName: g.languageId.nativeName,
+      }
+    : undefined;
+
+  const levelDoc = g.levelId && g.levelId._id
+    ? {
+        _id: g.levelId._id,
+        code: g.levelId.code,
+        name: g.levelId.name,
+      }
+    : undefined;
+
+  const book = g.bookId && g.bookId._id
+    ? {
+        _id: g.bookId._id,
+        title: g.bookId.title,
       }
     : undefined;
 
@@ -41,14 +59,24 @@ function formatLeanGroup(g) {
     _id: g._id,
     name: g.name,
     description: g.description,
+    languageId: g.languageId
+      ? (g.languageId._id ? g.languageId._id.toString() : g.languageId.toString())
+      : undefined,
+    language,
+    levelId: g.levelId
+      ? (g.levelId._id ? g.levelId._id.toString() : g.levelId.toString())
+      : undefined,
+    levelDoc,
+    bookId: g.bookId
+      ? (g.bookId._id ? g.bookId._id.toString() : g.bookId.toString())
+      : undefined,
+    book,
     level: g.level || undefined,
     subLevel: g.subLevel || undefined,
     capacity: g.capacity,
     schedule: g.schedule || undefined,
     startDate: g.startDate || undefined,
     endDate: g.endDate || undefined,
-    courseId: g.courseId ? g.courseId._id.toString() : undefined,
-    course,
     professorId: prof._id ? prof._id.toString() : prof.toString(),
     professor: formatUserDoc(prof),
     studentIds: studs.map((s) => (s._id ? s._id.toString() : s.toString())),
@@ -59,15 +87,18 @@ function formatLeanGroup(g) {
   };
 }
 
+const populatePaths = [
+  { path: 'professorId', select: userPublicFields },
+  { path: 'studentIds', select: userPublicFields },
+  { path: 'languageId', select: 'name code nativeName icon' },
+  { path: 'levelId', select: 'code name order' },
+  { path: 'bookId', select: 'title' },
+];
+
 async function populateGroupDoc(doc) {
   if (!doc) return null;
   const g = await ClassGroup.findById(doc._id || doc)
-    .populate('professorId', userPublicFields)
-    .populate('studentIds', userPublicFields)
-    .populate({
-      path: 'courseId',
-      select: 'title language level'
-    })
+    .populate(populatePaths)
     .lean();
 
   return formatLeanGroup(g);
@@ -82,11 +113,33 @@ function canReadGroup(req, group) {
   return false;
 }
 
+async function validateLanguageLevelBook({ languageId, levelId, bookId }) {
+  if (!languageId) {
+    return { error: 'languageId is required' };
+  }
+  const language = await Language.findById(languageId);
+  if (!language) {
+    return { error: 'Language not found' };
+  }
+  if (levelId) {
+    const level = await Level.findById(levelId);
+    if (!level) return { error: 'Level not found' };
+    if (level.language.toString() !== languageId.toString()) {
+      return { error: 'Level does not belong to the selected language' };
+    }
+  }
+  if (bookId) {
+    const book = await Book.findById(bookId);
+    if (!book) return { error: 'Book not found' };
+  }
+  return { language };
+}
+
 // GET /api/class-groups
 const list = async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const skip = (page - 1) * limit;
 
     const filters = {};
@@ -95,15 +148,19 @@ const list = async (req, res) => {
     } else if (req.user.role === 'student') {
       filters.studentIds = req.user._id;
     }
+    if (req.query.status) {
+      filters.status = req.query.status;
+    } else if (req.query.includeArchived !== 'true' && req.user.role !== 'admin') {
+      filters.status = { $ne: 'archived' };
+    }
+    if (req.query.languageId) filters.languageId = req.query.languageId;
 
     const [raw, total] = await Promise.all([
       ClassGroup.find(filters)
         .sort({ updatedAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('professorId', userPublicFields)
-        .populate('studentIds', userPublicFields)
-        .populate({ path: 'courseId', select: 'title language level' })
+        .populate(populatePaths)
         .lean(),
       ClassGroup.countDocuments(filters)
     ]);
@@ -131,7 +188,9 @@ const create = async (req, res) => {
     const {
       name,
       description,
-      courseId,
+      languageId,
+      levelId,
+      bookId,
       professorId,
       studentIds = [],
       status = 'active',
@@ -145,6 +204,11 @@ const create = async (req, res) => {
 
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'ValidationError', message: 'name is required' });
+    }
+
+    const langCheck = await validateLanguageLevelBook({ languageId, levelId, bookId });
+    if (langCheck.error) {
+      return res.status(400).json({ error: 'ValidationError', message: langCheck.error });
     }
 
     let pid;
@@ -164,23 +228,12 @@ const create = async (req, res) => {
       return res.status(400).json({ error: 'ValidationError', message: 'Invalid professor' });
     }
 
-    if (courseId) {
-      const course = await Course.findById(courseId);
-      if (!course) {
-        return res.status(400).json({ error: 'NotFound', message: 'Course not found' });
-      }
-      if (course.professor.toString() !== pid.toString()) {
-        return res.status(400).json({
-          error: 'ValidationError',
-          message: 'Course professor must match cohort professor'
-        });
-      }
-    }
-
     const group = await ClassGroup.create({
       name: name.trim(),
       description: description ? String(description).trim() : undefined,
-      courseId: courseId || null,
+      languageId,
+      levelId: levelId || null,
+      bookId: bookId || null,
       professorId: pid,
       studentIds: Array.isArray(studentIds) ? studentIds : [],
       status: status === 'archived' ? 'archived' : 'active',
@@ -237,7 +290,22 @@ const update = async (req, res) => {
       return res.status(403).json({ error: 'Forbidden', message: 'You can only update your own cohorts' });
     }
 
-    const { name, description, courseId, professorId, studentIds, status, level, subLevel, capacity, schedule, startDate, endDate } = req.body;
+    const {
+      name,
+      description,
+      languageId,
+      levelId,
+      bookId,
+      professorId,
+      studentIds,
+      status,
+      level,
+      subLevel,
+      capacity,
+      schedule,
+      startDate,
+      endDate,
+    } = req.body;
 
     if (name !== undefined) group.name = String(name).trim();
     if (description !== undefined) group.description = description ? String(description).trim() : '';
@@ -257,20 +325,22 @@ const update = async (req, res) => {
       group.professorId = professorId;
     }
 
-    if (courseId !== undefined) {
-      if (!courseId) {
-        group.courseId = null;
-      } else {
-        const course = await Course.findById(courseId);
-        if (!course) return res.status(400).json({ error: 'NotFound', message: 'Course not found' });
-        if (course.professor.toString() !== group.professorId.toString()) {
-          return res.status(400).json({
-            error: 'ValidationError',
-            message: 'Course professor must match cohort professor'
-          });
-        }
-        group.courseId = courseId;
+    const nextLanguageId = languageId !== undefined ? languageId : group.languageId;
+    const nextLevelId = levelId !== undefined ? (levelId || null) : group.levelId;
+    const nextBookId = bookId !== undefined ? (bookId || null) : group.bookId;
+
+    if (languageId !== undefined || levelId !== undefined || bookId !== undefined) {
+      const langCheck = await validateLanguageLevelBook({
+        languageId: nextLanguageId,
+        levelId: nextLevelId,
+        bookId: nextBookId,
+      });
+      if (langCheck.error) {
+        return res.status(400).json({ error: 'ValidationError', message: langCheck.error });
       }
+      if (languageId !== undefined) group.languageId = languageId;
+      if (levelId !== undefined) group.levelId = levelId || null;
+      if (bookId !== undefined) group.bookId = bookId || null;
     }
 
     if (studentIds !== undefined) {

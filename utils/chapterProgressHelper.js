@@ -1,24 +1,23 @@
-const Course = require('../models/Course');
+const ClassGroup = require('../models/ClassGroup');
 const Chapter = require('../models/Chapter');
 const ChapterProgress = require('../models/ChapterProgress');
 const Enrollment = require('../models/Enrollment');
 const { Exercise, ExerciseSubmission } = require('../models/Exercise');
 const { LearningGame, GamePlay } = require('../models/LearningGame');
 const Class = require('../models/Class');
-const User = require('../models/User');
 
 const GAME_COMPLETE_SCORE = 50;
 
-async function isEnrolled(studentId, courseId) {
-  const course = await Course.findById(courseId).select('enrolledStudents bookId');
-  if (!course) return { ok: false, course: null };
-  const enrolled = course.enrolledStudents.some(
-    (e) => e.student?.toString() === studentId.toString()
+async function isGroupMember(studentId, classGroupId) {
+  const group = await ClassGroup.findById(classGroupId).select('studentIds bookId');
+  if (!group) return { ok: false, group: null };
+  const enrolled = (group.studentIds || []).some(
+    (id) => id?.toString() === studentId.toString()
   );
-  return { ok: enrolled, course };
+  return { ok: enrolled, group };
 }
 
-async function gatherChapterActivity(studentId, courseId, bookId, chapterIds) {
+async function gatherChapterActivity(studentId, classGroupId, bookId, chapterIds) {
   const chapterSet = new Set(chapterIds.map(String));
 
   const exercises = await Exercise.find({ book: bookId, chapter: { $in: chapterIds }, active: true }).select('_id chapter');
@@ -62,7 +61,7 @@ async function gatherChapterActivity(studentId, courseId, bookId, chapterIds) {
   }
 
   const sessions = await Class.find({
-    course: courseId,
+    classGroupId,
     chapterId: { $in: chapterIds },
     status: 'completed',
   }).select('chapterId');
@@ -113,22 +112,22 @@ function deriveChapterStatus(chapterId, index, chapters, activity, prevCompleted
   };
 }
 
-async function syncCourseChapterProgress(studentId, courseId) {
-  const { ok, course } = await isEnrolled(studentId, courseId);
-  if (!ok || !course) return null;
+async function syncGroupChapterProgress(studentId, classGroupId) {
+  const { ok, group } = await isGroupMember(studentId, classGroupId);
+  if (!ok || !group) return null;
 
-  const bookId = course.bookId;
+  const bookId = group.bookId;
   if (!bookId) {
-    return { courseId, bookId: null, overallProgress: 0, chapters: [] };
+    return { classGroupId, bookId: null, overallProgress: 0, chapters: [] };
   }
 
   const chapters = await Chapter.find({ book: bookId, status: 'published' }).sort({ order: 1 });
   if (!chapters.length) {
-    return { courseId, bookId, overallProgress: 0, chapters: [] };
+    return { classGroupId, bookId, overallProgress: 0, chapters: [] };
   }
 
   const chapterIds = chapters.map((c) => c._id);
-  const activity = await gatherChapterActivity(studentId, courseId, bookId, chapterIds);
+  const activity = await gatherChapterActivity(studentId, classGroupId, bookId, chapterIds);
 
   const results = [];
   let prevCompleted = true;
@@ -142,7 +141,7 @@ async function syncCourseChapterProgress(studentId, courseId) {
     prevCompleted = derived.status === 'completed';
 
     const doc = await ChapterProgress.findOneAndUpdate(
-      { student: studentId, course: courseId, chapter: ch._id },
+      { student: studentId, classGroup: classGroupId, chapter: ch._id },
       {
         book: bookId,
         status: derived.status,
@@ -168,18 +167,13 @@ async function syncCourseChapterProgress(studentId, courseId) {
 
   const overallProgress = Math.round((completedCount / chapters.length) * 100);
 
-  const courseDoc = await Course.findById(courseId);
-  if (courseDoc) {
-    await courseDoc.updateStudentProgress(studentId, overallProgress);
-  }
-
   await Enrollment.findOneAndUpdate(
-    { student: studentId, course: courseId, status: 'active' },
+    { student: studentId, classGroup: classGroupId, status: 'active' },
     { progress: overallProgress, status: overallProgress >= 100 ? 'completed' : 'active' }
   );
 
   return {
-    courseId: courseId.toString(),
+    classGroupId: classGroupId.toString(),
     bookId: bookId.toString(),
     overallProgress,
     completedChapters: completedCount,
@@ -188,23 +182,33 @@ async function syncCourseChapterProgress(studentId, courseId) {
   };
 }
 
-async function getCourseLeaderboard(courseId, limit = 10) {
-  const course = await Course.findById(courseId)
-    .populate('enrolledStudents.student', 'firstName lastName studentInfo.gamification')
-    .select('enrolledStudents title');
-  if (!course) return [];
+/** @deprecated alias */
+const syncCourseChapterProgress = syncGroupChapterProgress;
 
-  const rows = course.enrolledStudents
-    .filter((e) => e.student)
-    .map((e) => {
-      const s = e.student;
+async function getGroupLeaderboard(classGroupId, limit = 10) {
+  const group = await ClassGroup.findById(classGroupId)
+    .populate('studentIds', 'firstName lastName studentInfo.gamification')
+    .select('studentIds name');
+  if (!group) return [];
+
+  const enrollments = await Enrollment.find({
+    classGroup: classGroupId,
+    status: { $in: ['active', 'completed'] },
+  }).select('student progress');
+  const progressByStudent = new Map(
+    enrollments.map((e) => [e.student.toString(), e.progress || 0])
+  );
+
+  const rows = (group.studentIds || [])
+    .filter((s) => s)
+    .map((s) => {
       const gam = s.studentInfo?.gamification || {};
       return {
         studentId: s._id.toString(),
         firstName: s.firstName,
         lastName: s.lastName,
         displayName: `${s.firstName} ${s.lastName}`.trim(),
-        progress: e.progress || 0,
+        progress: progressByStudent.get(s._id.toString()) || 0,
         totalXp: gam.totalXp || 0,
         currentStreak: gam.currentStreak || 0,
         badgesCount: (gam.badges || []).length,
@@ -219,8 +223,13 @@ async function getCourseLeaderboard(courseId, limit = 10) {
   return rows.slice(0, limit).map((row, index) => ({ rank: index + 1, ...row }));
 }
 
+/** @deprecated alias */
+const getCourseLeaderboard = getGroupLeaderboard;
+
 module.exports = {
+  syncGroupChapterProgress,
   syncCourseChapterProgress,
+  getGroupLeaderboard,
   getCourseLeaderboard,
   GAME_COMPLETE_SCORE,
 };

@@ -1,19 +1,19 @@
-const Course = require('../models/Course');
+const ClassGroup = require('../models/ClassGroup');
 const Class = require('../models/Class');
 
-async function professorOwnsCourse(professorId, courseId) {
-  const course = await Course.findById(courseId).select('professor');
-  if (!course) return false;
-  return course.professor.toString() === professorId.toString();
+async function professorOwnsClassGroup(professorId, classGroupId) {
+  const group = await ClassGroup.findById(classGroupId).select('professorId');
+  if (!group) return false;
+  return group.professorId && group.professorId.toString() === professorId.toString();
 }
 
+/** @deprecated alias */
+const professorOwnsCourse = professorOwnsClassGroup;
+
 async function professorTeachesStudent(professorId, studentId) {
-  const courses = await Course.find({ professor: professorId }).select('_id');
-  if (!courses.length) return false;
-  const courseIds = courses.map((c) => c._id);
-  const match = await Course.findOne({
-    _id: { $in: courseIds },
-    'enrolledStudents.student': studentId
+  const match = await ClassGroup.findOne({
+    professorId,
+    studentIds: studentId,
   }).select('_id');
   return !!match;
 }
@@ -21,7 +21,6 @@ async function professorTeachesStudent(professorId, studentId) {
 async function studentEnrolledInClass(studentId, classDoc) {
   const sid = studentId.toString();
 
-  // Déjà inscrit à la session live
   if (
     (classDoc.enrolledStudents || []).some(
       (e) => e.student && e.student.toString() === sid
@@ -30,19 +29,7 @@ async function studentEnrolledInClass(studentId, classDoc) {
     return true;
   }
 
-  // Inscrit au cours
-  const course = await Course.findById(classDoc.course).select('enrolledStudents');
-  if (
-    course?.enrolledStudents?.some(
-      (e) => e.student && e.student.toString() === sid
-    )
-  ) {
-    return true;
-  }
-
-  // Membre de la cohorte liée à la session
   if (classDoc.classGroupId) {
-    const ClassGroup = require('../models/ClassGroup');
     const group = await ClassGroup.findById(classDoc.classGroupId).select('studentIds');
     if ((group?.studentIds || []).some((id) => id && id.toString() === sid)) {
       return true;
@@ -52,24 +39,30 @@ async function studentEnrolledInClass(studentId, classDoc) {
   return false;
 }
 
-async function assertExportAccess(req, { courseId, classId }) {
+async function assertExportAccess(req, { classGroupId, courseId, classId }) {
+  const groupId = classGroupId || courseId;
   if (req.user.role === 'admin') return { ok: true };
 
   if (req.user.role !== 'professor') {
     return { ok: false, status: 403, message: 'Not authorized' };
   }
 
-  if (courseId) {
-    const allowed = await professorOwnsCourse(req.user._id, courseId);
-    return allowed ? { ok: true } : { ok: false, status: 403, message: 'Not authorized for this course' };
+  if (groupId) {
+    const allowed = await professorOwnsClassGroup(req.user._id, groupId);
+    return allowed
+      ? { ok: true }
+      : { ok: false, status: 403, message: 'Not authorized for this class group' };
   }
 
   if (classId) {
-    const classDoc = await Class.findById(classId).select('course professor');
+    const classDoc = await Class.findById(classId).select('classGroupId professor');
     if (!classDoc) return { ok: false, status: 404, message: 'Class not found' };
-    const ownsCourse = await professorOwnsCourse(req.user._id, classDoc.course);
-    const isClassProfessor = classDoc.professor && classDoc.professor.toString() === req.user._id.toString();
-    if (ownsCourse || isClassProfessor) return { ok: true };
+    const ownsGroup = classDoc.classGroupId
+      ? await professorOwnsClassGroup(req.user._id, classDoc.classGroupId)
+      : false;
+    const isClassProfessor =
+      classDoc.professor && classDoc.professor.toString() === req.user._id.toString();
+    if (ownsGroup || isClassProfessor) return { ok: true };
     return { ok: false, status: 403, message: 'Not authorized for this class' };
   }
 
@@ -77,8 +70,9 @@ async function assertExportAccess(req, { courseId, classId }) {
 }
 
 module.exports = {
+  professorOwnsClassGroup,
   professorOwnsCourse,
   professorTeachesStudent,
   studentEnrolledInClass,
-  assertExportAccess
+  assertExportAccess,
 };

@@ -38,18 +38,12 @@ const classSchema = new mongoose.Schema({
   },
 
   // Informations de la classe
-  course: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Course',
-    required: true
-  },
-  /** Optional cohort link (scheduled session for a class group) */
   classGroupId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ClassGroup',
-    default: null
+    required: true
   },
-  /** Optional chapter link (from course book) */
+  /** Optional chapter link (from group book) */
   chapterId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Chapter',
@@ -280,7 +274,7 @@ const classSchema = new mongoose.Schema({
 });
 
 // Index pour améliorer les performances
-classSchema.index({ course: 1 });
+classSchema.index({ classGroupId: 1 });
 classSchema.index({ professor: 1 });
 classSchema.index({ type: 1, status: 1 });
 classSchema.index({ 'schedule.startTime': 1 });
@@ -372,8 +366,8 @@ classSchema.methods.updateProgress = function(studentId, progress) {
 };
 
 // Méthodes statiques
-classSchema.statics.findByCourse = function(courseId) {
-  return this.find({ course: courseId }).populate('professor', 'firstName lastName email');
+classSchema.statics.findByClassGroup = function(classGroupId) {
+  return this.find({ classGroupId }).populate('professor', 'firstName lastName email');
 };
 
 classSchema.statics.findLiveClasses = function() {

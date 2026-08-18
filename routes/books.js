@@ -2,11 +2,13 @@ const express = require('express');
 const router = express.Router();
 const bookCtrl = require('../controllers/bookController');
 const chapterCtrl = require('../controllers/chapterController');
+const readerCtrl = require('../controllers/bookReaderController');
 const {
   authenticateToken,
   optionalAuth,
   authorizeRoles,
   authorizeAdminLevels,
+  requireRegloForStudents,
 } = require('../middleware/auth');
 const { uploadDocument, uploadImage, handleUploadError } = require('../middleware/upload');
 
@@ -16,8 +18,25 @@ const contentAdmin = [
   authorizeAdminLevels('super', 'full', 'content'),
 ];
 
+const bookContent = [authenticateToken, requireRegloForStudents];
+
 router.get('/', optionalAuth, bookCtrl.listBooks);
-router.get('/:id/download', authenticateToken, bookCtrl.downloadBookPdf);
+
+router.get('/:id/download', ...bookContent, bookCtrl.downloadBookPdf);
+router.get('/:id/stream', optionalAuth, readerCtrl.streamBookPdf);
+router.get('/:id/reader', ...bookContent, readerCtrl.getBookReader);
+
+router.get('/:id/bookmarks', ...bookContent, readerCtrl.listBookmarks);
+router.post('/:id/bookmarks', ...bookContent, readerCtrl.createBookmark);
+router.delete('/:id/bookmarks/:page', ...bookContent, readerCtrl.deleteBookmark);
+
+router.get('/:id/progress', ...bookContent, readerCtrl.getReadingProgress);
+router.put('/:id/progress', ...bookContent, readerCtrl.upsertReadingProgress);
+
+router.get('/:id/page-metadata', ...bookContent, readerCtrl.listPageMetadata);
+router.put('/:id/page-metadata/:pageNumber', ...contentAdmin, readerCtrl.upsertPageMetadata);
+router.delete('/:id/page-metadata/:pageNumber', ...contentAdmin, readerCtrl.deletePageMetadata);
+
 router.get('/:id', optionalAuth, bookCtrl.getBook);
 router.post('/', ...contentAdmin, bookCtrl.createBook);
 router.put('/:id', ...contentAdmin, bookCtrl.updateBook);

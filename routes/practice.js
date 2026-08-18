@@ -8,31 +8,31 @@ const {
 } = require('../middleware/auth');
 
 router.get(
-  '/course/:courseId',
+  '/group/:classGroupId',
   authenticateToken,
   requireRegloForStudents,
-  practiceCtrl.getCoursePractice
+  practiceCtrl.getGroupPractice
 );
 router.post(
-  '/course/:courseId/ensure',
+  '/group/:classGroupId/ensure',
   authenticateToken,
   requireRegloForStudents,
-  practiceCtrl.ensureCoursePractice
+  practiceCtrl.ensureGroupPractice
 );
 router.get(
-  '/course/:courseId/leaderboard',
+  '/group/:classGroupId/leaderboard',
   authenticateToken,
   requireRegloForStudents,
   practiceCtrl.getLeaderboard
 );
 router.get(
-  '/course/:courseId/challenges',
+  '/group/:classGroupId/challenges',
   authenticateToken,
   requireRegloForStudents,
   practiceCtrl.listChallenges
 );
 router.post(
-  '/course/:courseId/challenges',
+  '/group/:classGroupId/challenges',
   authenticateToken,
   authorizeRoles('professor', 'admin'),
   practiceCtrl.createChallenge

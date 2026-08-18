@@ -1,5 +1,11 @@
 const mongoose = require('mongoose');
 
+/**
+ * Catalogue book (e.g. Menschen A1).
+ * Store PDF via object storage / uploads — not the binary in MongoDB.
+ * Commercial textbooks may be referenced only when Nour Academy holds the required license.
+ */
+
 const bookSchema = new mongoose.Schema(
   {
     title: {
@@ -19,9 +25,15 @@ const bookSchema = new mongoose.Schema(
       ref: 'Level',
       default: null,
     },
+    isbn: { type: String, trim: true, maxlength: 32, default: '' },
     coverUrl: { type: String, default: null },
+    // Storage key or local path — never the raw PDF binary.
+    // Commercial textbooks (e.g. Menschen) require a valid license/rights.
     pdfUrl: { type: String, default: null },
     pdfSize: { type: Number, default: 0 },
+    pdfMimeType: { type: String, default: 'application/pdf' },
+    pageCount: { type: Number, min: 0, default: 0 },
+    publicResource: { type: Boolean, default: false },
     description: {
       en: { type: String, maxlength: 2000 },
       fr: { type: String, maxlength: 2000 },
